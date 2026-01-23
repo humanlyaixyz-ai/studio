@@ -1,0 +1,5 @@
+{
+  "name": "Virtual Shoot App",
+  "description": "Generate virtual try-on images with various poses and styles using Gemini 3 Pro Image, then edit them with text prompts.",
+  "requestFramePermissions": ["clipboard"]
+}
