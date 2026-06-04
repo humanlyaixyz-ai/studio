@@ -80,6 +80,16 @@ export interface ShotConfig {
   referenceImage?: UploadedFile;
 }
 
+export interface AssetFile {
+  id: string;
+  data: string;
+  mimeType: string;
+}
+
+export interface ProjectAssets {
+  [slotKey: string]: AssetFile[];
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -87,15 +97,15 @@ export interface Project {
   category: ProductCategory;
   model: ModelType;
   brandName: string;
-  shots: ShotConfig[]; // Replaces posePrompts
-  // Legacy support for migration
+  shots: ShotConfig[];
+  assets?: ProjectAssets;
   posePrompts?: string[];
-  environment?: string; // Overall environment
-  lighting?: string;    // Lighting control
-  negativePrompt?: string; // Constraints
-  seed?: number;        // Consistency
-  fashionType?: string; // New: Fashion Style (e.g., Casual, Streetwear)
-  mood?: string;        // New: Atmosphere (e.g., Standard Studio, Moody)
+  environment?: string;
+  lighting?: string;
+  negativePrompt?: string;
+  seed?: number;
+  fashionType?: string;
+  mood?: string;
 }
 
 export interface StylingConfig {

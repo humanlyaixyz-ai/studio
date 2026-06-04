@@ -6,6 +6,7 @@ interface ImageUploadCardProps {
   onRemove?: () => void;
   currentImage?: string;
   required?: boolean;
+  uploadId?: string;
 }
 
 const ImageUploadCard: React.FC<ImageUploadCardProps> = ({
@@ -14,7 +15,9 @@ const ImageUploadCard: React.FC<ImageUploadCardProps> = ({
   onRemove,
   currentImage,
   required = false,
+  uploadId,
 }) => {
+  const inputId = `upload-${uploadId ?? label}`;
   const [error, setError] = useState<string | null>(null);
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -47,7 +50,7 @@ const ImageUploadCard: React.FC<ImageUploadCardProps> = ({
     if (onRemove) {
       onRemove();
     }
-    const input = document.getElementById(`upload-${label}`) as HTMLInputElement;
+    const input = document.getElementById(inputId) as HTMLInputElement;
     if (input) {
       input.value = '';
     }
@@ -57,7 +60,7 @@ const ImageUploadCard: React.FC<ImageUploadCardProps> = ({
     <div className="relative group w-24 flex flex-col items-center">
       <div className="relative w-24 h-24">
         <label 
-          htmlFor={`upload-${label}`} 
+          htmlFor={inputId} 
           className={`
             w-full h-full rounded-2xl flex flex-col items-center justify-center cursor-pointer transition-all duration-200 overflow-hidden border
             ${currentImage 
@@ -86,7 +89,7 @@ const ImageUploadCard: React.FC<ImageUploadCardProps> = ({
             </>
           )}
           <input
-            id={`upload-${label}`}
+            id={inputId}
             type="file"
             accept="image/*"
             onChange={handleFileChange}

@@ -5,9 +5,12 @@ import CategorySelection from './components/CategorySelection';
 import PoseEditor from './components/PoseEditor';
 import ColorGradingControl from './components/ColorGradingControl';
 import CameraSettings from './components/CameraSettings';
-import { ModelType, UploadedFiles, GeneratedImage, ProductCategory, GenerationBatch, ActiveGenerationMeta, Project, StylingConfig, CameraConfig, ShotConfig, ApiProvider } from './types';
+import { Dashboard } from './pages/Dashboard';
+import { CreateProject } from './pages/CreateProject';
+import { ModelType, UploadedFiles, GeneratedImage, ProductCategory, GenerationBatch, ActiveGenerationMeta, Project, StylingConfig, CameraConfig, ShotConfig, ApiProvider, AssetFile } from './types';
 import { geminiService, refineImageDetails, setGeminiApiKey } from './services/geminiService';
 import { kieService, setKieApiKey } from './services/kieService';
+import * as db from './services/dbService';
 import { createSolidColorBase64, applyColorGrading, ColorAdjustments, urlToBase64 } from './utils/imageUtils';
 import {
   ITEMS_TO_UPLOAD,
@@ -23,16 +26,47 @@ import {
   MOODS
 } from './constants';
 
+const PRODUCT_SLOT_KEYS: Partial<Record<ProductCategory, string[]>> = {
+  [ProductCategory.TOP]:     ['topFront', 'topBack'],
+  [ProductCategory.JACKET]:  ['topFront', 'topBack'],
+  [ProductCategory.COAT]:    ['topFront', 'topBack'],
+  [ProductCategory.SWEATER]: ['topFront', 'topBack'],
+  [ProductCategory.ETHNIC]:  ['topFront', 'topBack'],
+  [ProductCategory.BOTTOM]:  ['bottomFront', 'bottomBack'],
+  [ProductCategory.DRESS]:   ['topFront', 'topBack', 'bottomFront', 'bottomBack'],
+  [ProductCategory.SAREE]:   ['drape', 'blouse', 'accessory1', 'accessory2'],
+  [ProductCategory.SHOES]:       ['shoes'],
+  [ProductCategory.ACCESSORIES]: ['accessories'],
+};
+
+const ITEM_LABELS: Record<string, string> = Object.fromEntries(
+  ITEMS_TO_UPLOAD.map(i => [i.key, i.label])
+);
+
+function getAllSlotsForCategory(category: ProductCategory) {
+  const isNonFashion = NON_FASHION_CATEGORIES.includes(category);
+  const isSaree = category === ProductCategory.SAREE;
+  const productKeys = new Set(PRODUCT_SLOT_KEYS[category] || []);
+  const sareeFields = ['drape', 'blouse', 'accessory1', 'accessory2'];
+  return ITEMS_TO_UPLOAD.filter(item => {
+    if (!isSaree && sareeFields.includes(item.key)) return false;
+    if (isSaree && ['topFront', 'topBack', 'bottomBack', 'accessories', 'sunglasses', 'shoes'].includes(item.key)) return false;
+    if (isNonFashion) return item.key === 'productImage' || item.key === 'background';
+    if (item.key === 'productImage') return false;
+    return true;
+  }).map(item => ({ key: item.key, label: item.label, required: isNonFashion ? item.key === 'productImage' : productKeys.has(item.key) }));
+}
+
 function App() {
   // --- Project State ---
-  const [projects, setProjects] = useState<Project[]>(() => {
-    try {
-      const stored = localStorage.getItem('projects');
-      return stored ? JSON.parse(stored) : [];
-    } catch { return []; }
-  });
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [isLoadingProjects, setIsLoadingProjects] = useState(true);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
+  const [isLoadingProject, setIsLoadingProject] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState<boolean>(false);
+  const [view, setView] = useState<'dashboard' | 'create' | 'workspace'>('dashboard');
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [workspaceTab, setWorkspaceTab] = useState<'inputs' | 'settings' | 'camera' | 'shots' | null>(null);
 
   // --- Configuration State (Used for both Creation Form & Active Workspace) ---
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFiles>({});
@@ -70,15 +104,7 @@ function App() {
   const [activeGenerationMeta, setActiveGenerationMeta] = useState<ActiveGenerationMeta | null>(null);
   const [liveGenerationImages, setLiveGenerationImages] = useState<GeneratedImage[]>([]);
 
-  const [generationHistory, setGenerationHistory] = useState<GenerationBatch[]>(() => {
-    try {
-      const storedHistory = localStorage.getItem('generationHistory');
-      return storedHistory ? JSON.parse(storedHistory) : [];
-    } catch (e) {
-      console.error("Failed to parse generation history from localStorage", e);
-      return [];
-    }
-  });
+  const [generationHistory, setGenerationHistory] = useState<GenerationBatch[]>([]);
   const [viewingHistoryBatchId, setViewingHistoryBatchId] = useState<string | null>(null);
 
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -101,10 +127,13 @@ function App() {
 
   // --- Effects ---
 
-  // Persist Projects
+  // Load projects from Supabase on mount
   useEffect(() => {
-    localStorage.setItem('projects', JSON.stringify(projects));
-  }, [projects]);
+    db.loadProjects()
+      .then(setProjects)
+      .catch(e => console.error('[app] Failed to load projects:', e))
+      .finally(() => setIsLoadingProjects(false));
+  }, []);
 
   // Update API Key
   useEffect(() => {
@@ -163,23 +192,7 @@ function App() {
     }
   }, [currentShots, activeProject, isCreatingProject]);
 
-  // Persist History
-  useEffect(() => {
-    try {
-      const historyToStore = generationHistory.map(batch => ({
-        ...batch,
-        images: batch.images.map(image => {
-          const { url, ...rest } = image;
-          return rest;
-        })
-      }));
-      localStorage.setItem('generationHistory', JSON.stringify(historyToStore));
-    } catch (e: any) {
-      if (e.name === 'QuotaExceededError') {
-        setError("History storage full. Clear history to save new items.");
-      }
-    }
-  }, [generationHistory]);
+  // (History is persisted to Supabase on generation complete — see effect below)
 
   useEffect(() => {
     if (error && errorContainerRef.current) {
@@ -208,6 +221,10 @@ function App() {
           };
           setGenerationHistory(prev => [newBatch, ...prev]);
           setViewingHistoryBatchId(activeGenerationMeta.id);
+          // Persist to Supabase (upload images to Storage + save metadata)
+          db.saveGenerationBatch(newBatch).catch(e =>
+            console.error('[app] Failed to save generation batch:', e)
+          );
         }
         setActiveGenerationMeta(null);
         setLiveGenerationImages([]);
@@ -221,6 +238,7 @@ function App() {
   const handleStartCreateProject = () => {
     setActiveProject(null);
     setIsCreatingProject(true);
+    setView('create');
     // Reset form to defaults
     setSelectedCategory(ProductCategory.TOP);
     setSelectedModel(ModelType.ECOM_SHOOT);
@@ -233,6 +251,16 @@ function App() {
     setProjectMood('Standard Studio');
     // Poses will auto-reset via effect
   };
+
+  const handleEditProject = (project: Project) => {
+    setEditingProject(project);
+    setView('create');
+  };
+
+  const handleDeleteProject = useCallback((id: string) => {
+    setProjects(prev => prev.filter(p => p.id !== id));
+    db.deleteProject(id).catch(e => console.error('[app] deleteProject:', e));
+  }, []);
 
   const handleSaveProject = () => {
     if (!selectedCategory || !selectedModel) return;
@@ -256,18 +284,20 @@ function App() {
     setProjects(prev => [newProject, ...prev]);
     handleLoadProject(newProject);
     setIsCreatingProject(false);
+    setView('workspace');
   };
 
-  const handleLoadProject = (project: Project) => {
+  const handleLoadProject = async (project: Project) => {
     setIsCreatingProject(false);
     setActiveProject(project);
+    setView('workspace');
+    setGenerationHistory([]);
 
-    // Load config
+    // Sync config immediately
     setSelectedCategory(project.category);
     setSelectedModel(project.model);
     setBrandName(project.brandName);
 
-    // Handle Migration: If old project has posePrompts but no shots
     if (project.shots) {
       setCurrentShots(project.shots);
     } else if (project.posePrompts) {
@@ -282,25 +312,73 @@ function App() {
     setProjectSeed(project.seed);
     setProjectFashionType(project.fashionType || 'Casual');
     setProjectMood(project.mood || 'Standard Studio');
-
-    // Reset workspace specific uploads/config
-    setUploadedFiles({});
     setStylingConfig({ materialDescription: '' });
     setCameraConfig({ framing: '', angle: '', focalLength: '' });
     setLiveGenerationImages([]);
     setViewingHistoryBatchId(null);
     setError(null);
+    setUploadedFiles({});
+
+    // Load assets + history from Supabase in parallel
+    setIsLoadingProject(true);
+    try {
+      const [assets, history] = await Promise.all([
+        db.loadProjectAssets(project.id),
+        db.loadProjectBatches(project.id),
+      ]);
+
+      setActiveProject(prev => prev ? { ...prev, assets } : prev);
+      setGenerationHistory(history);
+
+      // Pre-populate uploadedFiles from supporting assets (non-product slots)
+      if (Object.keys(assets).length > 0) {
+        const productKeys = new Set<string>(PRODUCT_SLOT_KEYS[project.category] || []);
+        const preloaded: UploadedFiles = {};
+        Object.entries(assets).forEach(([key, files]) => {
+          if (!productKeys.has(key) && files.length > 0) {
+            preloaded[key as keyof UploadedFiles] = { data: files[0].data, mimeType: files[0].mimeType };
+          }
+        });
+        setUploadedFiles(preloaded);
+      }
+    } catch (e) {
+      console.error('[app] Failed to load project data from Supabase:', e);
+    } finally {
+      setIsLoadingProject(false);
+    }
   };
 
   const handleBackToProjects = () => {
     setActiveProject(null);
     setIsCreatingProject(false);
+    setView('dashboard');
   };
 
-  const handleFileUpload = (key: keyof UploadedFiles, base64: string, mimeType: string) => {
+  const handleFileUpload = useCallback((key: keyof UploadedFiles, base64: string, mimeType: string) => {
     setUploadedFiles((prev) => ({ ...prev, [key]: { data: base64, mimeType } }));
     setError(null);
-  };
+
+    if (activeProject) {
+      // Optimistic: add temp asset to project library
+      const tempId = `tmp-${Date.now()}`;
+      const tempAsset: AssetFile = { id: tempId, data: base64, mimeType };
+      setActiveProject(prev => prev ? {
+        ...prev,
+        assets: { ...prev.assets, [key]: [...(prev.assets?.[key] || []), tempAsset] },
+      } : prev);
+
+      // Persist to Supabase in background, replace temp with real id
+      db.uploadAndSaveAsset(activeProject.id, key, base64, mimeType)
+        .then(saved => {
+          setActiveProject(prev => {
+            if (!prev) return prev;
+            const updated = (prev.assets?.[key] || []).map(f => f.id === tempId ? saved : f);
+            return { ...prev, assets: { ...prev.assets, [key]: updated } };
+          });
+        })
+        .catch(e => console.error('[app] Failed to save asset:', e));
+    }
+  }, [activeProject]);
 
   const handleRemoveUpload = (key: keyof UploadedFiles) => {
     setUploadedFiles((prev) => {
@@ -769,9 +847,15 @@ function App() {
   }, []);
 
   const handleClearHistory = useCallback(() => {
+    // Delete all project batches from Supabase in background
+    projectHistory.forEach(batch => {
+      db.deleteGenerationBatch(batch.id).catch(e =>
+        console.error('[app] deleteGenerationBatch:', e)
+      );
+    });
     setGenerationHistory([]);
     if (viewingHistoryBatchId !== null) handleViewCurrentGeneration();
-  }, [viewingHistoryBatchId, handleViewCurrentGeneration]);
+  }, [viewingHistoryBatchId, handleViewCurrentGeneration, projectHistory]);
 
   const handleEditAddReference = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -804,616 +888,489 @@ function App() {
     return activeGenerationMeta ? 'Generating...' : activeProject ? activeProject.name : 'Output';
   }, [viewingHistoryBatchId, generationHistory, activeGenerationMeta, activeProject]);
 
+  // ── Dashboard view ────────────────────────────────────────
+  if (view === 'dashboard') {
+    return (
+      <Dashboard
+        projects={projects}
+        onCreateProject={handleStartCreateProject}
+        onOpenProject={handleLoadProject}
+        onEditProject={handleEditProject}
+        onDeleteProject={handleDeleteProject}
+        apiProvider={apiProvider}
+        onProviderChange={setApiProvider}
+        apiKey={apiKey}
+        onApiKeyChange={setApiKey}
+        kieApiKey={kieApiKey}
+        onKieApiKeyChange={setKieApiKeyState}
+      />
+    );
+  }
+
+  // ── Create / Edit Project view ────────────────────────────
+  if (view === 'create') {
+    return (
+      <CreateProject
+        onBack={() => { setView('dashboard'); setEditingProject(null); }}
+        initialProject={editingProject ?? undefined}
+        onSave={async (data, editId) => {
+          if (editId) {
+            const existing = projects.find(p => p.id === editId);
+            const updated: Project = { ...existing, ...data, id: editId, createdAt: existing?.createdAt || Date.now() };
+            setProjects(prev => prev.map(p => p.id === editId ? updated : p));
+            // Persist metadata to Supabase (assets already saved on upload)
+            db.saveProject(updated).catch(e => console.error('[app] saveProject(edit):', e));
+            setView('dashboard');
+            setEditingProject(null);
+          } else {
+            const newProject: Project = { ...data, id: Date.now().toString(), createdAt: Date.now() };
+            setProjects(prev => [newProject, ...prev]);
+            // Save project metadata to Supabase
+            try {
+              await db.saveProject(newProject);
+              // Upload any assets built in CreateProject
+              if (newProject.assets && Object.keys(newProject.assets).length > 0) {
+                db.uploadProjectAssets(newProject.id, newProject.assets)
+                  .catch(e => console.error('[app] uploadProjectAssets:', e));
+              }
+            } catch (e) {
+              console.error('[app] saveProject(create):', e);
+            }
+            handleLoadProject(newProject);
+          }
+        }}
+      />
+    );
+  }
+
+    // ── Workspace view ────────────────────────────────────────────
+  const WS = {
+    bg: '#0A0908', surface: '#111010', surfHi: '#161412',
+    border: '#1C1A18', borderHi: '#2C2A28',
+    txtPri: '#E8E3DC', txtSec: '#5A5550', txtMid: '#8A8580', gold: '#C8A97A',
+  };
+
   return (
-    <div className="flex flex-col lg:flex-row h-screen bg-[#131314] text-[#E3E3E3] font-sans overflow-hidden selection:bg-[#A8C7FA] selection:text-black">
+    <div style={{ fontFamily: "'Sora', sans-serif", background: WS.bg, height: '100vh', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden', color: WS.txtPri }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;1,400&family=Sora:wght@300;400;500&display=swap');
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes spin-slow { to { transform: rotate(360deg); } }
+        .ws-img-card:hover .ws-img-overlay { opacity: 1 !important; }
+      `}</style>
 
-      {/* Sidebar Control Panel */}
-      <div className="lg:w-[380px] flex flex-col bg-[#1E1F20] border-r border-[#444746] relative z-20">
-        {/* Header */}
-        <div className="px-6 py-5 border-b border-[#444746] flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-[#A8C7FA] flex items-center justify-center text-[#062E6F] font-bold text-xl shadow-inner">
-            C
+      {/* ── Top slim bar ── */}
+      <header style={{ height: 50, borderBottom: `1px solid ${WS.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', flexShrink: 0, background: WS.bg, zIndex: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={{ width: 26, height: 26, borderRadius: '50%', background: WS.gold, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="#0A0908" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 12, height: 12 }}>
+              <circle cx="12" cy="12" r="3" /><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4" />
+            </svg>
           </div>
-          <div className="flex-1">
-            <h1 className="text-lg font-semibold tracking-tight text-[#E3E3E3]">HUMANLY AI</h1>
-          </div>
+          <button onClick={handleBackToProjects} style={{ fontSize: 10, color: WS.txtSec, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', letterSpacing: '0.04em', transition: 'color 0.12s', padding: 0 }} onMouseEnter={e => (e.currentTarget.style.color = WS.txtPri)} onMouseLeave={e => (e.currentTarget.style.color = WS.txtSec)}>
+            ← Dashboard
+          </button>
           {activeProject && (
-            <button onClick={handleBackToProjects} className="text-xs text-[#A8C7FA] hover:text-white transition-colors">
-              Exit Project
-            </button>
+            <>
+              <span style={{ color: WS.border }}>·</span>
+              <span style={{ fontSize: 11, fontWeight: 500, color: WS.txtMid }}>{activeProject.name}</span>
+            </>
           )}
         </div>
 
-        {/* --- VIEW: HOME (PROJECT LIST) --- */}
-        {!activeProject && !isCreatingProject && (
-          <>
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
-
-              {/* Settings / API Key */}
-              <div>
-                <h3 className="text-xs font-semibold text-[#8E918F] mb-3">Settings</h3>
-
-                {/* Provider Selection */}
-                <div className="flex gap-2 mb-3 bg-[#131314] p-1 rounded-lg border border-[#444746]">
-                  <button
-                    onClick={() => setApiProvider('google')}
-                    className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${apiProvider === 'google' ? 'bg-[#444746] text-white' : 'text-[#8E918F] hover:text-[#C4C7C5]'}`}
-                  >
-                    Google Cloud
-                  </button>
-                  <button
-                    onClick={() => setApiProvider('kie')}
-                    className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${apiProvider === 'kie' ? 'bg-[#444746] text-white' : 'text-[#8E918F] hover:text-[#C4C7C5]'}`}
-                  >
-                    Kie.ai
-                  </button>
-                </div>
-
-                {apiProvider === 'google' ? (
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="Paste Gemini API Key"
-                    className="w-full p-3 bg-[#131314] border border-[#444746] text-sm text-[#E3E3E3] placeholder-[#8E918F] focus:border-[#A8C7FA] outline-none rounded-lg transition-colors"
-                  />
-                ) : (
-                  <input
-                    type="password"
-                    value={kieApiKey}
-                    onChange={(e) => setKieApiKeyState(e.target.value)}
-                    placeholder="Paste Kie.ai API Key"
-                    className="w-full p-3 bg-[#131314] border border-[#444746] text-sm text-[#E3E3E3] placeholder-[#8E918F] focus:border-[#A8C7FA] outline-none rounded-lg transition-colors"
-                  />
-                )}
-              </div>
-
-              <div>
-                <div className="flex justify-between items-end mb-3">
-                  <h3 className="text-xs font-semibold text-[#8E918F]">Your Projects</h3>
-                </div>
-
-                <button
-                  onClick={handleStartCreateProject}
-                  className="w-full py-4 rounded-xl border border-dashed border-[#444746] text-[#A8C7FA] hover:bg-[#004A77]/20 hover:border-[#A8C7FA] transition-all flex flex-col items-center justify-center gap-2 mb-4 group"
-                >
-                  <div className="p-2 rounded-full bg-[#131314] group-hover:bg-[#004A77] transition-colors">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5"><path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" /></svg>
-                  </div>
-                  <span className="text-xs font-medium">Create New Project</span>
-                </button>
-
-                <div className="space-y-3">
-                  {projects.map(project => (
-                    <button
-                      key={project.id}
-                      onClick={() => handleLoadProject(project)}
-                      className="w-full text-left p-4 bg-[#131314] border border-[#444746] rounded-xl hover:border-[#8E918F] hover:bg-[#2D2E30] transition-all group"
-                    >
-                      <h4 className="text-sm font-semibold text-[#E3E3E3] mb-1 group-hover:text-white">{project.name}</h4>
-                      <div className="flex items-center gap-2 text-[10px] text-[#8E918F]">
-                        <span className="bg-[#1E1F20] px-1.5 py-0.5 rounded">{project.model.replace(/_/g, ' ')}</span>
-                        <span>•</span>
-                        <span>{new Date(project.createdAt).toLocaleDateString()}</span>
-                      </div>
-                    </button>
-                  ))}
-                  {projects.length === 0 && (
-                    <p className="text-xs text-[#444746] text-center mt-8">No projects yet.</p>
-                  )}
-                </div>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* --- VIEW: CREATE PROJECT --- */}
-        {!activeProject && isCreatingProject && (
-          <>
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
-              <div className="flex items-center gap-2 mb-2">
-                <button onClick={() => setIsCreatingProject(false)} className="text-[#8E918F] hover:text-white">
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5"><path fillRule="evenodd" d="M17 10a.75.75 0 01-.75.75H5.612l4.158 3.96a.75.75 0 11-1.04 1.08l-5.5-5.25a.75.75 0 010-1.08l5.5-5.25a.75.75 0 111.04 1.08L5.612 9.25H16.25A.75.75 0 0117 10z" clipRule="evenodd" /></svg>
-                </button>
-                <h2 className="text-sm font-bold">New Project Configuration</h2>
-              </div>
-
-              <CategorySelection selectedCategory={selectedCategory} onSelect={setSelectedCategory} />
-
-              <ModelSelection selectedModel={selectedModel} onSelect={setSelectedModel} />
-
-              {/* Fashion Type Selection */}
-              <div>
-                <h3 className="text-xs font-semibold text-[#8E918F] mb-3">Fashion Type</h3>
-                <div className="flex flex-wrap gap-2">
-                  {FASHION_TYPES.map(type => (
-                    <button
-                      key={type}
-                      onClick={() => setProjectFashionType(type)}
-                      className={`
-                             px-3 py-1.5 rounded-lg border text-[10px] font-medium transition-colors
-                             ${projectFashionType === type
-                          ? 'bg-[#A8C7FA]/20 border-[#A8C7FA] text-[#A8C7FA]'
-                          : 'bg-[#131314] border-[#444746] text-[#C4C7C5] hover:bg-[#2D2E30]'}
-                           `}
-                    >
-                      {type}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Mood & Atmosphere */}
-              <div>
-                <h3 className="text-xs font-semibold text-[#8E918F] mb-3">Mood & Atmosphere</h3>
-                <div className="relative">
-                  <select
-                    value={projectMood}
-                    onChange={(e) => setProjectMood(e.target.value)}
-                    className="w-full p-3 bg-[#131314] border border-[#444746] text-sm text-[#E3E3E3] rounded-lg outline-none focus:border-[#A8C7FA] appearance-none"
-                  >
-                    {MOODS.map(m => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-[#8E918F]"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" /></svg>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="text-xs font-semibold text-[#8E918F] mb-3">Brand Context</h3>
-                <input
-                  type="text"
-                  value={brandName}
-                  onChange={(e) => setBrandName(e.target.value)}
-                  placeholder="Brand name (Used for project name)"
-                  className="w-full p-3 bg-[#131314] border border-[#444746] text-sm text-[#E3E3E3] placeholder-[#8E918F] focus:border-[#A8C7FA] outline-none rounded-lg transition-colors"
-                />
-              </div>
-
-              {/* Environment and Lighting */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <h3 className="text-xs font-semibold text-[#8E918F] mb-3">Environment</h3>
-                  <input
-                    type="text"
-                    value={projectEnvironment}
-                    onChange={(e) => setProjectEnvironment(e.target.value)}
-                    placeholder="e.g. Minimal Studio"
-                    className="w-full p-3 bg-[#131314] border border-[#444746] text-xs text-[#E3E3E3] placeholder-[#8E918F] focus:border-[#A8C7FA] outline-none rounded-lg transition-colors"
-                  />
-                </div>
-                <div>
-                  <h3 className="text-xs font-semibold text-[#8E918F] mb-3">Lighting</h3>
-                  <input
-                    type="text"
-                    value={projectLighting}
-                    onChange={(e) => setProjectLighting(e.target.value)}
-                    placeholder="e.g. Soft Daylight"
-                    className="w-full p-3 bg-[#131314] border border-[#444746] text-xs text-[#E3E3E3] placeholder-[#8E918F] focus:border-[#A8C7FA] outline-none rounded-lg transition-colors"
-                  />
-                </div>
-              </div>
-
-              {/* Advanced Controls (Negative Prompt & Seed) */}
-              <div className="pt-2 border-t border-[#444746]">
-                <h3 className="text-xs font-semibold text-[#8E918F] mb-3 mt-2">Advanced Constraints</h3>
-                <div className="space-y-3">
-                  <div>
-                    <label className="text-[10px] text-[#C4C7C5] mb-1 block">Negative Prompt (What to avoid)</label>
-                    <textarea
-                      value={projectNegativePrompt}
-                      onChange={(e) => setProjectNegativePrompt(e.target.value)}
-                      placeholder="e.g. text, blur, low quality..."
-                      className="w-full p-2 bg-[#131314] border border-[#444746] text-xs text-[#E3E3E3] placeholder-[#8E918F] focus:border-[#A8C7FA] outline-none rounded-lg transition-colors h-16 resize-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-[#C4C7C5] mb-1 block">Seed (Optional - For Consistency)</label>
-                    <input
-                      type="number"
-                      value={projectSeed || ''}
-                      onChange={(e) => setProjectSeed(e.target.value ? parseInt(e.target.value) : undefined)}
-                      placeholder="e.g. 42"
-                      className="w-full p-2 bg-[#131314] border border-[#444746] text-xs text-[#E3E3E3] placeholder-[#8E918F] focus:border-[#A8C7FA] outline-none rounded-lg transition-colors"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <PoseEditor
-                selectedModel={selectedModel}
-                selectedCategory={selectedCategory}
-                currentShots={currentShots}
-                onShotsChange={setCurrentShots}
-              />
-            </div>
-
-            <div className="p-6 border-t border-[#444746] bg-[#1E1F20]">
-              <button
-                onClick={handleSaveProject}
-                className="w-full py-3.5 rounded-full bg-[#A8C7FA] text-[#062E6F] text-sm font-semibold hover:bg-[#D3E3FD] transition-all shadow-md"
-              >
-                Create & Continue
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {/* History */}
+          {projectHistory.length > 0 && (
+            <div style={{ position: 'relative' }} className="history-wrap">
+              <button style={{ fontSize: 10, color: WS.txtSec, background: 'none', border: `1px solid transparent`, borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: 5, transition: 'all 0.12s' }} onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = WS.border; (e.currentTarget as HTMLElement).style.color = WS.txtMid; }} onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'transparent'; (e.currentTarget as HTMLElement).style.color = WS.txtSec; }}>
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" style={{ width: 11, height: 11 }}><circle cx="8" cy="8" r="6"/><path d="M8 5v3.5l2 1.5" strokeLinecap="round"/></svg>
+                History
               </button>
-            </div>
-          </>
-        )}
-
-        {/* --- VIEW: WORKSPACE (ACTIVE PROJECT) --- */}
-        {activeProject && !isCreatingProject && (
-          <>
-            <div className="bg-[#131314] px-6 py-3 border-b border-[#444746]">
-              <span className="text-[10px] text-[#8E918F] uppercase tracking-wider font-bold">Project</span>
-              <h2 className="text-sm font-semibold text-white truncate" title={activeProject.name}>{activeProject.name}</h2>
-            </div>
-
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
-
-              {/* Input Assets */}
-              <div>
-                <h3 className="text-xs font-semibold text-[#8E918F] mb-3">Input Assets</h3>
-                <div className="grid grid-cols-3 gap-3">
-                  {ITEMS_TO_UPLOAD.map((item) => {
-                    const isNonFashion = NON_FASHION_CATEGORIES.includes(selectedCategory);
-                    const isSaree = selectedCategory === ProductCategory.SAREE;
-
-                    const sareeFields = ['drape', 'blouse', 'accessory1', 'accessory2'];
-
-                    // Hide Saree fields in other categories
-                    if (!isSaree && sareeFields.includes(item.key)) {
-                      return null;
-                    }
-
-                    // Hide standard fields in Saree category
-                    if (isSaree && ['topFront', 'topBack', 'bottomBack', 'accessories', 'sunglasses', 'shoes'].includes(item.key)) {
-                      return null;
-                    }
-
-                    if (isNonFashion) {
-                      if (item.key !== 'productImage' && item.key !== 'background') return null;
-                    } else {
-                      if (item.key === 'productImage') return null;
-                    }
-
-                    let isRequired = false;
-                    if (isNonFashion) {
-                      if (item.key === 'productImage') isRequired = true;
-                    } else {
-                      if (item.key === 'characterFace') isRequired = true;
-                      else if (selectedCategory === ProductCategory.SHOES && item.key === 'shoes') isRequired = true;
-                      else if (selectedCategory === ProductCategory.ACCESSORIES && item.key === 'accessories') isRequired = true;
-                      else if (selectedCategory === ProductCategory.BOTTOM && (item.key === 'bottomFront' || item.key === 'bottomBack')) isRequired = true;
-                      else if (['Top', 'Jacket', 'Coat', 'Sweater', 'Ethnic'].includes(selectedCategory) && (item.key === 'topFront' || item.key === 'topBack')) isRequired = true;
-                      else if (selectedCategory === ProductCategory.DRESS && item.key === 'topFront') isRequired = true;
-                    }
-
-                    return (
-                      <ImageUploadCard
-                        key={item.key}
-                        label={item.label}
-                        onFileUpload={(base64, mimeType) => handleFileUpload(item.key as keyof UploadedFiles, base64, mimeType)}
-                        onRemove={() => handleRemoveUpload(item.key as keyof UploadedFiles)}
-                        currentImage={uploadedFiles[item.key as keyof UploadedFiles]?.data}
-                        required={isRequired}
-                      />
-                    );
-                  })}
+              <div className="history-dropdown" style={{ display: 'none', position: 'absolute', right: 0, top: '100%', marginTop: 4, width: 220, background: WS.surface, border: `1px solid ${WS.border}`, borderRadius: 6, padding: 6, zIndex: 60, boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px 8px', borderBottom: `1px solid ${WS.border}`, marginBottom: 4 }}>
+                  <span style={{ fontSize: 9, color: WS.txtSec, letterSpacing: '0.08em' }}>RECENT</span>
+                  <button onClick={handleClearHistory} style={{ fontSize: 9, color: '#E57373', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>Clear all</button>
                 </div>
+                {projectHistory.map(batch => (
+                  <button key={batch.id} onClick={() => handleViewHistoryBatch(batch.id)} style={{ width: '100%', textAlign: 'left', padding: '8px 10px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', borderRadius: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center', transition: 'background 0.1s' }} onMouseEnter={e => (e.currentTarget.style.background = WS.surfHi)} onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
+                    <div>
+                      <div style={{ fontSize: 11, color: WS.txtPri, fontWeight: 500 }}>{new Date(parseInt(batch.id)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                      <div style={{ fontSize: 9, color: WS.txtSec }}>{batch.model.replace(/_/g, ' ')}</div>
+                    </div>
+                    <svg viewBox="0 0 12 12" fill="none" stroke={WS.txtSec} strokeWidth="1.4" style={{ width: 10, height: 10 }}><path d="M2 6h8M7 3l3 3-3 3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  </button>
+                ))}
               </div>
-
-              {/* Fabric & Styling Details Input - CONSOLIDATED */}
-              <div>
-                <h3 className="text-xs font-semibold text-[#8E918F] mb-3">Material & Texture Guide</h3>
-                <textarea
-                  placeholder="Optional: Describe material details only if necessary to correct hallucination (e.g. 'Ribbed knit cotton texture'). Leave empty to rely on image input."
-                  value={stylingConfig.materialDescription}
-                  onChange={(e) => setStylingConfig(prev => ({ ...prev, materialDescription: e.target.value }))}
-                  className="w-full p-2 bg-[#131314] border border-[#444746] rounded text-xs text-[#E3E3E3] placeholder-[#8E918F] outline-none focus:border-[#A8C7FA] resize-none h-16"
-                />
-              </div>
-
-              {/* Camera & Composition Controls (New) */}
-              <CameraSettings config={cameraConfig} onChange={(update) => setCameraConfig(prev => ({ ...prev, ...update }))} />
-
-              {/* Backgrounds */}
-              <div className="mt-4">
-                <h3 className="text-xs font-semibold text-[#8E918F] mb-3">Studio Backgrounds</h3>
-                <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
-                  {PRESET_BACKGROUNDS[selectedModel]?.map((bg, index) => (
-                    <button
-                      key={index}
-                      onClick={() => handlePresetBackgroundSelect(bg.color)}
-                      className="flex-shrink-0 flex items-center gap-2 px-3 py-1.5 rounded-full border border-[#444746] bg-[#1E1F20] hover:bg-[#2D2E30] transition-colors group"
-                      title={`Use ${bg.label}`}
-                    >
-                      <div
-                        className="w-3 h-3 rounded-full border border-black/10"
-                        style={{ backgroundColor: bg.color }}
-                      />
-                      <span className="text-[10px] font-medium text-[#C4C7C5] whitespace-nowrap">{bg.label}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Shot List - Editable via PoseEditor */}
-              <PoseEditor
-                selectedModel={selectedModel}
-                selectedCategory={selectedCategory}
-                currentShots={currentShots}
-                onShotsChange={setCurrentShots}
-              />
+              <style>{`.history-wrap:hover .history-dropdown { display: block !important; }`}</style>
             </div>
+          )}
 
-            <div className="p-6 border-t border-[#444746] bg-[#1E1F20]">
-              {error && (
-                <div ref={errorContainerRef} className="mb-4 p-3 bg-[#3C1A1A] border border-[#602020] text-[#F2B8B5] text-xs rounded-lg flex flex-col gap-1">
-                  <span className="font-semibold flex items-center gap-1">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4"><path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" /></svg>
-                    Alert
-                  </span>
-                  {error}
-                </div>
-              )}
+          {viewingHistoryBatchId && (
+            <button onClick={handleViewCurrentGeneration} style={{ fontSize: 10, color: WS.gold, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>← Live</button>
+          )}
 
-              <button
-                onClick={handleGenerateTryOn}
-                disabled={!isFormValid || (apiProvider === 'google' ? !apiKey : !kieApiKey) || isLoading}
-                className={`
-                    w-full py-3.5 rounded-full text-sm font-semibold transition-all shadow-md flex items-center justify-center gap-2
-                    ${isFormValid && (apiProvider === 'google' ? apiKey : kieApiKey) && !isLoading
-                    ? 'bg-[#A8C7FA] text-[#062E6F] hover:bg-[#D3E3FD] hover:shadow-lg'
-                    : 'bg-[#444746] text-[#8E918F] cursor-not-allowed opacity-70'
-                  }
-                  `}
-              >
-                {isLoading ? (
-                  <>
-                    <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    Processing ({completedImagesCount}/{imagesToGenerateCount})
-                  </>
-                ) : (
-                  <>
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4"><path d="M15.98 1.804a1 1 0 00-1.96 0l-.24 1.192a1 1 0 01-.784.785l-1.192.238a1 1 0 000 1.96l1.192.238a1 1 0 01.785.785l.238 1.192a1 1 0 001.96 0l.238-1.192a1 1 0 01.785-.785l1.192-.238a1 1 0 000-1.96l-1.192-.238a1 1 0 01-.785-.785l-.238-1.192zM6.949 5.684a1 1 0 00-1.898 0l-.683 2.051a1 1 0 01-.633.633l-2.051.683a1 1 0 000 1.898l2.051.683a1 1 0 01.633.633l.683 2.051a1 1 0 001.898 0l.683-2.051a1 1 0 01.633-.633l2.051-.683a1 1 0 000-1.898l-2.051-.683a1 1 0 01-.633-.633L6.95 5.684zM13.949 13.684a1 1 0 00-1.898 0l-.184.551a1 1 0 01-.632.633l-.551.183a1 1 0 000 1.898l.551.183a1 1 0 01.633.633l.183.551a1 1 0 001.898 0l.184-.551a1 1 0 01.632-.633l.551-.183a1 1 0 000-1.898l-.551-.184a1 1 0 01-.633-.632l-.183-.551z" /></svg>
-                    Generate Images
-                  </>
-                )}
-              </button>
-            </div>
-          </>
-        )}
-      </div>
+          <button onClick={handleBulkDownload} disabled={isZipping || !displayedImages.some(img => img.status === 'success' && img.url)} style={{ fontSize: 10, color: WS.txtSec, background: 'none', border: `1px solid ${WS.border}`, borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: 5, transition: 'all 0.12s', opacity: (isZipping || !displayedImages.some(img => img.status === 'success' && img.url)) ? 0.3 : 1 }} onMouseEnter={e => { if (!isZipping) { (e.currentTarget as HTMLElement).style.borderColor = WS.borderHi; (e.currentTarget as HTMLElement).style.color = WS.txtMid; } }} onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = WS.border; (e.currentTarget as HTMLElement).style.color = WS.txtSec; }}>
+            <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" style={{ width: 11, height: 11 }}><path d="M2 10v2a1 1 0 001 1h8a1 1 0 001-1v-2" strokeLinecap="round"/><path d="M7 1v8M4.5 6.5L7 9l2.5-2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            {isZipping ? 'Zipping…' : 'Download'}
+          </button>
+        </div>
+      </header>
 
-      {/* Main Canvas Area */}
-      <div className="flex-1 flex flex-col bg-[#131314] relative h-full">
-        {/* Top Bar */}
-        <div className="h-16 flex items-center justify-between px-8 border-b border-[#444746] bg-[#1E1F20]">
-          <h2 className="text-sm font-semibold text-[#E3E3E3] flex items-center gap-2">
-            <span className={`w-2 h-2 rounded-full inline-block ${activeProject ? 'bg-green-500' : 'bg-gray-500'}`}></span>
-            {currentOutputTitle}
-          </h2>
+      {/* ── Main canvas ── */}
+      <main ref={outputPreviewRef} style={{ flex: 1, overflowY: 'auto', position: 'relative', paddingBottom: workspaceTab ? 340 : 90 }}>
 
-          <div className="flex items-center gap-3">
-            {viewingHistoryBatchId && (
-              <button onClick={handleViewCurrentGeneration} className="text-xs font-medium text-[#A8C7FA] hover:text-[#D3E3FD] transition-colors">Back to Live</button>
-            )}
-            {projectHistory.length > 0 && (
-              <div className="relative group">
-                <button className="text-xs font-medium text-[#C4C7C5] hover:text-white transition-colors flex items-center gap-2 px-3 py-1.5 rounded-full hover:bg-[#333]">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  History
-                </button>
-                <div className="absolute right-0 top-full mt-2 w-64 bg-[#1E1F20] border border-[#444746] rounded-xl shadow-lg p-2 hidden group-hover:block max-h-80 overflow-y-auto z-50">
-                  <div className="flex justify-between items-center mb-2 px-3 pt-2">
-                    <span className="text-xs font-semibold text-[#8E918F]">Recent</span>
-                    <button onClick={handleClearHistory} className="text-[10px] text-red-400 hover:text-red-300">Clear All</button>
-                  </div>
-                  {projectHistory.map(batch => (
-                    <button key={batch.id} onClick={() => handleViewHistoryBatch(batch.id)} className="w-full text-left p-3 hover:bg-[#2D2E30] rounded-lg mb-1 flex items-center justify-between group/item">
-                      <div>
-                        <div className="text-xs text-[#E3E3E3] font-medium">{new Date(parseInt(batch.id)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                        <div className="text-[10px] text-[#8E918F]">{batch.model.replace(/_/g, ' ')}</div>
-                      </div>
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-[#8E918F] opacity-0 group-hover/item:opacity-100 transition-opacity"><path fillRule="evenodd" d="M3 10a.75.75 0 01.75-.75h10.638L10.23 5.29a.75.75 0 111.04-1.08l5.5 5.25a.75.75 0 010 1.08l-5.5 5.25a.75.75 0 11-1.04-1.08l4.158-3.96H3.75A.75.75 0 013 10z" clipRule="evenodd" /></svg>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <button
-              onClick={handleBulkDownload}
-              disabled={isZipping || !displayedImages.some(img => img.status === 'success' && img.url)}
-              className="flex items-center gap-2 px-4 py-1.5 rounded-full border border-[#444746] hover:bg-[#2D2E30] hover:text-[#E3E3E3] text-xs font-medium text-[#C4C7C5] transition-all disabled:opacity-30 disabled:hover:bg-transparent"
-            >
-              {isZipping ? (
-                <span className="animate-pulse">Zipping...</span>
-              ) : (
-                <>
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
-                  Download All
-                </>
-              )}
-            </button>
+        {/* Empty: no project */}
+        {!activeProject && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke={WS.txtSec} strokeWidth="1" style={{ width: 48, height: 48, marginBottom: 12 }}><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/></svg>
+            <p style={{ fontSize: 12, color: WS.txtMid }}>Open a project to begin</p>
           </div>
-        </div>
+        )}
 
-        {/* Content Area */}
-        <div ref={outputPreviewRef} className="flex-1 overflow-y-auto p-8 custom-scrollbar relative">
+        {/* Project loading spinner */}
+        {isLoadingProject && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', zIndex: 10 }}>
+            <div style={{ width: 36, height: 36, border: `2px solid ${WS.borderHi}`, borderTopColor: WS.gold, borderRadius: '50%', animation: 'spin 0.8s linear infinite', marginBottom: 14 }} />
+            <p style={{ fontSize: 11, color: WS.txtSec }}>Loading assets…</p>
+          </div>
+        )}
 
-          {!activeProject && !isCreatingProject && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-[#444746] pointer-events-none">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1} stroke="currentColor" className="w-16 h-16 mb-4 opacity-50"><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" /></svg>
-              <p className="text-sm font-medium">Select or Create a Project</p>
+        {/* Empty: project but no images */}
+        {activeProject && displayedImages.length === 0 && !isLoading && !isLoadingProject && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+            <div style={{ width: 64, height: 64, borderRadius: '50%', border: `1px solid ${WS.borderHi}`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 20 }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke={WS.txtSec} strokeWidth="1" style={{ width: 28, height: 28 }}><path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z"/><path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM18.75 10.5h.008v.008h-.008V10.5z"/></svg>
             </div>
-          )}
+            <h3 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 22, fontStyle: 'italic', fontWeight: 400, color: WS.txtPri, marginBottom: 8 }}>Ready to generate</h3>
+            <p style={{ fontSize: 11, color: WS.txtMid, marginBottom: 6 }}>Upload your assets, then hit Generate.</p>
+            <p style={{ fontSize: 10, color: WS.txtSec }}>Open <strong style={{ color: WS.gold }}>Inputs</strong> from the bar below to upload.</p>
+          </div>
+        )}
 
-          {activeProject && displayedImages.length === 0 && !isLoading && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-[#444746] pointer-events-none">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1} stroke="currentColor" className="w-16 h-16 mb-4 opacity-50"><path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z" /><path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM18.75 10.5h.008v.008h-.008V10.5z" /></svg>
-              <p className="text-sm font-medium">Ready to Generate</p>
-              <p className="text-xs mt-1 opacity-70">Upload your assets in the sidebar to begin.</p>
-            </div>
-          )}
+        {/* Generating spinner overlay */}
+        {isLoading && displayedImages.length === 0 && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', zIndex: 10 }}>
+            <div style={{ width: 40, height: 40, border: `3px solid ${WS.gold}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite', marginBottom: 16 }} />
+            <p style={{ fontSize: 12, color: WS.txtMid }}>Generating…</p>
+          </div>
+        )}
 
-          {isLoading && displayedImages.length === 0 && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-20">
-              <div className="w-12 h-12 border-4 border-[#A8C7FA] border-t-transparent rounded-full animate-spin mb-4"></div>
-              <p className="text-sm font-medium text-[#E3E3E3]">HUMANLY AI Working...</p>
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-6 pb-40">
+        {/* Images grid */}
+        {displayedImages.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 16, padding: 24 }}>
             {displayedImages.map((image, index) => (
-              <div key={image.id} className="group relative flex flex-col">
-                {/* Image Frame */}
+              <div key={image.id} className="ws-img-card" style={{ position: 'relative' }}>
                 <div
-                  className={`
-                      aspect-[3/4] bg-[#1E1F20] relative rounded-xl overflow-hidden transition-all duration-300
-                      ${selectedImageForEditIndex === index ? 'ring-2 ring-[#A8C7FA] shadow-lg' : 'hover:shadow-md border border-[#444746]'}
-                    `}
+                  style={{ aspectRatio: '3/4', background: WS.surfHi, borderRadius: 8, overflow: 'hidden', position: 'relative', border: `1px solid ${selectedImageForEditIndex === index ? WS.gold : WS.border}`, cursor: image.status === 'success' ? 'pointer' : 'default', transition: 'border-color 0.15s' }}
                   onClick={() => image.status === 'success' && setSelectedImageForEditIndex(index)}
                 >
                   {image.url ? (
-                    <img src={image.url} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" alt="Generated" />
+                    <img src={image.url} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} alt="Generated" />
                   ) : (
-                    <div className="w-full h-full flex items-center justify-center bg-[#1E1F20]">
-                      {image.status === 'pending' && <span className="text-xs font-mono text-[#8E918F]">Pending...</span>}
-                      {image.status === 'generating' && <div className="w-6 h-6 border-2 border-[#E3E3E3] border-t-transparent rounded-full animate-spin"></div>}
-                      {image.status === 'refining' && <div className="w-6 h-6 border-2 border-[#A8C7FA] border-t-transparent rounded-full animate-spin"></div>}
-                      {image.status === 'failed' && <span className="text-xs text-red-400 font-medium px-2 text-center">Failed</span>}
-                      {image.status === 'success' && !image.url && <span className="text-xs text-[#8E918F] text-center px-4">Preview Unavailable<br />(Archived)</span>}
+                    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {image.status === 'pending' && <span style={{ fontSize: 10, color: WS.txtSec }}>Pending…</span>}
+                      {(image.status === 'generating' || image.status === 'refining') && (
+                        <div style={{ width: 20, height: 20, border: `2px solid ${image.status === 'refining' ? WS.gold : WS.txtMid}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+                      )}
+                      {image.status === 'failed' && <span style={{ fontSize: 10, color: '#E57373', textAlign: 'center', padding: '0 12px' }}>Failed</span>}
                     </div>
                   )}
 
-                  {/* Overlay Actions */}
+                  {/* Hover overlay */}
                   {image.status === 'success' && image.url && (
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 backdrop-blur-[2px]">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleDownloadImage(image.url, `Humanly_Shoot_${index}.jpg`) }}
-                        className="p-2.5 rounded-full bg-white text-black hover:bg-[#E3E3E3] shadow-lg transform transition-transform hover:scale-105"
-                        title="Download"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
+                    <div className="ws-img-overlay" style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', opacity: 0, transition: 'opacity 0.15s', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                      <button onClick={e => { e.stopPropagation(); handleDownloadImage(image.url, `Shot_${String(index+1).padStart(2,'0')}.jpg`); }} style={{ width: 36, height: 36, borderRadius: '50%', background: 'white', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Download">
+                        <svg viewBox="0 0 14 14" fill="none" stroke="#0A0908" strokeWidth="1.5" style={{ width: 12, height: 12 }}><path d="M2 10v2a1 1 0 001 1h8a1 1 0 001-1v-2" strokeLinecap="round"/><path d="M7 1v8M4.5 6.5L7 9l2.5-2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                       </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleRefineImage(index) }}
-                        className="p-2.5 rounded-full bg-[#1E1F20] text-[#A8C7FA] hover:bg-[#2D2E30] border border-[#444746] shadow-lg transform transition-transform hover:scale-105"
-                        title="Refine Details"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l2.846-.813a1.125 1.125 0 0 0 .617-.443l4.885-6.839a.578.578 0 0 0-.135-.85L14.73 7.378a.578.578 0 0 0-.85.135l-4.885 6.839a1.125 1.125 0 0 0-.182.552Z" /><path strokeLinecap="round" strokeLinejoin="round" d="M11.25 10.5h.008v.008h-.008V10.5Z" /></svg>
+                      <button onClick={e => { e.stopPropagation(); handleRefineImage(index); }} style={{ width: 36, height: 36, borderRadius: '50%', background: WS.surface, border: `1px solid ${WS.border}`, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Refine">
+                        <svg viewBox="0 0 14 14" fill="none" stroke={WS.gold} strokeWidth="1.4" style={{ width: 12, height: 12 }}><path d="M9.5 2.5l2 2L4 12H2v-2L9.5 2.5zM8 4l2 2" strokeLinecap="round" strokeLinejoin="round"/></svg>
                       </button>
-                      {/* Color Grade Button */}
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleOpenColorGrading(index) }}
-                        className="p-2.5 rounded-full bg-[#1E1F20] text-[#A8C7FA] hover:bg-[#2D2E30] border border-[#444746] shadow-lg transform transition-transform hover:scale-105"
-                        title="Color Grade"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 13.5V3.75m0 9.75a1.5 1.5 0 0 1 0 3m0-3a1.5 1.5 0 0 0 0 3m0 3.75V16.5m12-3V3.75m0 9.75a1.5 1.5 0 0 1 0 3m0-3a1.5 1.5 0 0 0 0 3m0 3.75V16.5m-6-9V3.75m0 3.75a1.5 1.5 0 0 1 0 3m0-3a1.5 1.5 0 0 0 0 3m0 9.75V10.5" />
-                        </svg>
+                      <button onClick={e => { e.stopPropagation(); handleOpenColorGrading(index); }} style={{ width: 36, height: 36, borderRadius: '50%', background: WS.surface, border: `1px solid ${WS.border}`, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Color Grade">
+                        <svg viewBox="0 0 14 14" fill="none" stroke={WS.txtMid} strokeWidth="1.4" style={{ width: 12, height: 12 }}><path d="M3 8V3m0 5a2 2 0 010 4m0-4a2 2 0 000 4M7 6V3m0 3a2 2 0 010 4m0-4a2 2 0 000 4M11 10V3m0 7a2 2 0 010 0" strokeLinecap="round"/></svg>
                       </button>
                     </div>
                   )}
 
-                  {/* Failure Overlay */}
+                  {/* Failed overlay */}
                   {image.status === 'failed' && (
-                    <div className="absolute inset-0 bg-[#3C1A1A]/90 flex flex-col items-center justify-center p-4 text-center backdrop-blur-sm">
-                      <p className="text-[10px] text-[#F2B8B5] mb-3 line-clamp-3">{image.errorMessage}</p>
-                      <button onClick={(e) => { e.stopPropagation(); handleRetryImage(index); }} className="px-4 py-1.5 bg-[#F2B8B5] text-[#602020] rounded-full text-xs font-semibold hover:bg-white transition-colors">Retry</button>
+                    <div style={{ position: 'absolute', inset: 0, background: 'rgba(60,26,26,0.9)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 12, textAlign: 'center' }}>
+                      <p style={{ fontSize: 9, color: '#F2B8B5', marginBottom: 8, lineHeight: 1.5 }}>{image.errorMessage}</p>
+                      <button onClick={e => { e.stopPropagation(); handleRetryImage(index); }} style={{ padding: '4px 12px', background: '#F2B8B5', color: '#602020', border: 'none', borderRadius: 20, fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Retry</button>
                     </div>
                   )}
                 </div>
 
-                <div className="mt-2 flex justify-between items-center px-1">
-                  <p className="text-[10px] font-mono text-[#8E918F]">IMG_{String(index + 1).padStart(2, '0')}</p>
+                <div style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 2px' }}>
+                  <span style={{ fontSize: 9, color: WS.txtSec, fontVariantNumeric: 'tabular-nums' }}>IMG_{String(index + 1).padStart(2, '0')}</span>
                   {image.generationTime && (
-                    <div className="flex items-center gap-1 bg-[#1E1F20] px-1.5 py-0.5 rounded text-[10px] text-[#C4C7C5]">
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" /></svg>
-                      {(image.generationTime / 1000).toFixed(1)}s
-                    </div>
+                    <span style={{ fontSize: 9, color: WS.txtSec }}>{(image.generationTime / 1000).toFixed(1)}s</span>
                   )}
                 </div>
               </div>
             ))}
           </div>
-        </div>
+        )}
+      </main>
 
-        {/* Floating Edit Bar */}
-        {displayedImages.some(img => img.status === 'success') && (
-          <div className="absolute bottom-6 left-6 right-6 z-30">
-            <div className="max-w-4xl mx-auto bg-[#1E1F20] border border-[#444746] rounded-2xl p-4 shadow-2xl backdrop-blur-md">
-              <div className="flex items-start gap-4">
-                <div className="flex-1">
-                  <div className="flex flex-wrap gap-2 mb-3">
-                    {ITEMS_TO_UPLOAD.map(item => {
-                      const key = item.key as keyof UploadedFiles;
-                      if (!uploadedFiles[key]) return null;
-                      const isSelected = editSelectedOriginalKeys.includes(key);
-                      return (
-                        <button
-                          key={key}
-                          onClick={() => toggleEditOriginalItem(key)}
-                          className={`
-                                 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors border
-                                 ${isSelected ? 'bg-[#D3E3FD] text-[#041E49] border-[#D3E3FD]' : 'bg-transparent text-[#C4C7C5] border-[#444746] hover:bg-[#2D2E30]'}
-                               `}
-                        >
-                          {isSelected ? '✓ ' : '+ '} {item.label}
-                        </button>
-                      );
-                    })}
-                  </div>
+      {/* ── Bottom panel (expands up) ── */}
+      {workspaceTab && activeProject && (
+        <div style={{ position: 'absolute', bottom: 68, left: '50%', transform: 'translateX(-50%)', width: 820, maxWidth: '96vw', maxHeight: '52vh', background: WS.surface, border: `1px solid ${WS.borderHi}`, borderRadius: 10, overflow: 'hidden', boxShadow: '0 -12px 48px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', zIndex: 40 }}>
 
-                  <div className="flex items-center gap-3 bg-[#131314] rounded-xl p-1.5 border border-[#444746] focus-within:border-[#A8C7FA] transition-colors">
-                    <div className="flex -space-x-1 pl-1">
-                      {editCustomReferences.map(ref => (
-                        <div key={ref.id} className="w-8 h-8 relative group">
-                          <img src={`data:${ref.mimeType};base64,${ref.data}`} className="w-full h-full object-cover rounded-full border border-[#131314]" />
-                          <button onClick={() => handleEditRemoveReference(ref.id)} className="absolute -top-1 -right-1 bg-[#444746] text-white w-4 h-4 rounded-full flex items-center justify-center text-[10px] hover:bg-red-400">&times;</button>
+          {/* Panel header */}
+          <div style={{ padding: '11px 20px', borderBottom: `1px solid ${WS.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+            <span style={{ fontSize: 10, fontWeight: 500, color: WS.txtSec, letterSpacing: '0.08em', textTransform: 'uppercase' as const }}>
+              {workspaceTab === 'inputs' ? 'Image Inputs' : workspaceTab === 'settings' ? 'Settings' : workspaceTab === 'camera' ? 'Camera' : 'Shot List'}
+            </span>
+            <button onClick={() => setWorkspaceTab(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: WS.txtSec, width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 3, transition: 'color 0.1s' }} onMouseEnter={e => (e.currentTarget.style.color = WS.txtPri)} onMouseLeave={e => (e.currentTarget.style.color = WS.txtSec)}>
+              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 10, height: 10 }}><path d="M2 2l8 8M10 2l-8 8" strokeLinecap="round"/></svg>
+            </button>
+          </div>
+
+          {/* Panel content */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: 20, scrollbarWidth: 'thin' as const, scrollbarColor: `${WS.border} transparent` }}>
+
+            {/* INPUTS TAB */}
+            {workspaceTab === 'inputs' && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 14 }}>
+                {getAllSlotsForCategory(selectedCategory).map(slot => {
+                  const projectFiles = (activeProject?.assets?.[slot.key] || []) as AssetFile[];
+                  const currentFile = uploadedFiles[slot.key as keyof UploadedFiles];
+                  return (
+                    <div key={slot.key}>
+                      <div style={{ fontSize: 10, color: WS.txtSec, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+                        {slot.label}
+                        {slot.required && <span style={{ color: '#E57373', fontSize: 8 }}>*</span>}
+                      </div>
+
+                      {/* Project asset thumbnails (selectable) */}
+                      {projectFiles.length > 0 && (
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 6 }}>
+                          {projectFiles.map(file => {
+                            const isActive = currentFile?.data === file.data;
+                            return (
+                              <button key={file.id} onClick={() => {
+                                isActive
+                                  ? setUploadedFiles(prev => { const u = {...prev}; delete u[slot.key as keyof UploadedFiles]; return u; })
+                                  : setUploadedFiles(prev => ({ ...prev, [slot.key as keyof UploadedFiles]: { data: file.data, mimeType: file.mimeType } }));
+                              }} style={{ padding: 0, background: 'none', border: 'none', cursor: 'pointer', borderRadius: 4, transition: 'transform 0.1s' }} title={isActive ? 'Deselect' : 'Select'}>
+                                <img src={`data:${file.mimeType};base64,${file.data}`} style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 4, display: 'block', border: `2px solid ${isActive ? WS.gold : 'transparent'}`, outline: `1px solid ${WS.border}` }} />
+                              </button>
+                            );
+                          })}
                         </div>
-                      ))}
-                      <label className="w-8 h-8 flex items-center justify-center bg-[#2D2E30] text-[#C4C7C5] rounded-full cursor-pointer hover:bg-[#444746] transition-colors border border-[#131314] z-10" title="Add Reference Image">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4"><path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" /></svg>
-                        <input type="file" accept="image/*" onChange={handleEditAddReference} className="hidden" />
-                      </label>
+                      )}
+
+                      {/* Upload card */}
+                      <ImageUploadCard
+                        label=""
+                        uploadId={slot.key}
+                        onFileUpload={(base64, mimeType) => handleFileUpload(slot.key as keyof UploadedFiles, base64, mimeType)}
+                        onRemove={() => handleRemoveUpload(slot.key as keyof UploadedFiles)}
+                        currentImage={currentFile?.data}
+                        required={slot.required}
+                      />
                     </div>
+                  );
+                })}
+              </div>
+            )}
 
-                    <div className="w-px h-6 bg-[#444746] mx-1"></div>
+            {/* SETTINGS TAB */}
+            {workspaceTab === 'settings' && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, maxWidth: 580 }}>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <div style={{ fontSize: 10, color: WS.txtSec, marginBottom: 7 }}>Material & texture guide</div>
+                  <textarea
+                    value={stylingConfig.materialDescription}
+                    onChange={e => setStylingConfig(prev => ({ ...prev, materialDescription: e.target.value }))}
+                    placeholder="Optional: describe fabric texture if AI needs correction…"
+                    style={{ width: '100%', height: 60, background: 'transparent', border: `1px solid ${WS.border}`, borderRadius: 4, color: WS.txtPri, fontSize: 11, fontFamily: 'inherit', resize: 'none', padding: '8px 10px', outline: 'none', boxSizing: 'border-box', lineHeight: 1.6 }}
+                    onFocus={e => (e.target.style.borderColor = WS.gold)}
+                    onBlur={e => (e.target.style.borderColor = WS.border)}
+                  />
+                </div>
+                {[
+                  { label: 'Environment', value: projectEnvironment, set: setProjectEnvironment, ph: 'Minimal studio, rooftop…' },
+                  { label: 'Lighting', value: projectLighting, set: setProjectLighting, ph: 'Soft daylight, ring light…' },
+                ].map(f => (
+                  <div key={f.label}>
+                    <div style={{ fontSize: 10, color: WS.txtSec, marginBottom: 7 }}>{f.label}</div>
+                    <input type="text" value={f.value} onChange={e => f.set(e.target.value)} placeholder={f.ph} style={{ width: '100%', background: 'transparent', border: `1px solid ${WS.border}`, borderRadius: 4, color: WS.txtPri, fontSize: 11, fontFamily: 'inherit', padding: '8px 10px', outline: 'none', boxSizing: 'border-box' }} onFocus={e => (e.target.style.borderColor = WS.gold)} onBlur={e => (e.target.style.borderColor = WS.border)} />
+                  </div>
+                ))}
+                <div>
+                  <div style={{ fontSize: 10, color: WS.txtSec, marginBottom: 7 }}>Negative prompt</div>
+                  <input type="text" value={projectNegativePrompt} onChange={e => setProjectNegativePrompt(e.target.value)} placeholder="blur, text, low quality…" style={{ width: '100%', background: 'transparent', border: `1px solid ${WS.border}`, borderRadius: 4, color: WS.txtPri, fontSize: 11, fontFamily: 'inherit', padding: '8px 10px', outline: 'none', boxSizing: 'border-box' }} onFocus={e => (e.target.style.borderColor = WS.gold)} onBlur={e => (e.target.style.borderColor = WS.border)} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, color: WS.txtSec, marginBottom: 7 }}>Seed</div>
+                  <input type="number" value={projectSeed ?? ''} onChange={e => setProjectSeed(e.target.value ? parseInt(e.target.value) : undefined)} placeholder="42" style={{ width: '100%', background: 'transparent', border: `1px solid ${WS.border}`, borderRadius: 4, color: WS.txtPri, fontSize: 11, fontFamily: 'inherit', padding: '8px 10px', outline: 'none', boxSizing: 'border-box' }} onFocus={e => (e.target.style.borderColor = WS.gold)} onBlur={e => (e.target.style.borderColor = WS.border)} />
+                </div>
+              </div>
+            )}
 
-                    <input
-                      type="text"
-                      value={editingPrompt}
-                      onChange={(e) => setEditingPrompt(e.target.value)}
-                      placeholder={selectedImageForEditIndex !== null ? "Describe your edit (e.g. 'Change background to a minimalist white room')..." : "Select an image above to start editing"}
-                      className="flex-1 bg-transparent text-sm text-[#E3E3E3] outline-none placeholder-[#8E918F]"
-                      disabled={selectedImageForEditIndex === null || isLoading}
-                    />
+            {/* CAMERA TAB */}
+            {workspaceTab === 'camera' && (
+              <div>
+                <CameraSettings config={cameraConfig} onChange={update => setCameraConfig(prev => ({ ...prev, ...update }))} />
+                <div style={{ marginTop: 20 }}>
+                  <div style={{ fontSize: 10, color: WS.txtSec, marginBottom: 10 }}>Studio backgrounds</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {PRESET_BACKGROUNDS[selectedModel]?.map((bg, i) => (
+                      <button key={i} onClick={() => handlePresetBackgroundSelect(bg.color)} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 20, border: `1px solid ${WS.border}`, background: 'transparent', cursor: 'pointer', fontFamily: 'inherit', transition: 'border-color 0.12s' }} onMouseEnter={e => (e.currentTarget.style.borderColor = WS.borderHi)} onMouseLeave={e => (e.currentTarget.style.borderColor = WS.border)}>
+                        <div style={{ width: 10, height: 10, borderRadius: '50%', background: bg.color, border: '1px solid rgba(255,255,255,0.1)' }} />
+                        <span style={{ fontSize: 10, color: WS.txtSec }}>{bg.label}</span>
+                      </button>
+                    ))}
                   </div>
                 </div>
-                <button
-                  onClick={handleApplyEdit}
-                  disabled={selectedImageForEditIndex === null || isLoading}
-                  className="h-[52px] px-6 rounded-xl bg-[#A8C7FA] text-[#062E6F] text-sm font-semibold hover:bg-[#D3E3FD] disabled:opacity-50 disabled:bg-[#444746] disabled:text-[#8E918F] transition-all shadow-md self-end"
-                >
-                  Apply
-                </button>
               </div>
+            )}
+
+            {/* SHOTS TAB */}
+            {workspaceTab === 'shots' && (
+              <PoseEditor
+                selectedModel={selectedModel}
+                selectedCategory={selectedCategory}
+                currentShots={currentShots}
+                onShotsChange={setCurrentShots}
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Bottom floating bar ── */}
+      {activeProject && (
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, display: 'flex', justifyContent: 'center', padding: '0 0 14px', zIndex: 50 }}>
+          <div style={{ background: '#1A1816', border: `1px solid #3A3632`, borderRadius: 50, padding: '5px 5px 5px 18px', display: 'flex', alignItems: 'center', gap: 14, boxShadow: '0 8px 48px rgba(0,0,0,0.8), 0 0 0 1px rgba(200,169,122,0.06)' }}>
+
+            {/* Status */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ width: 5, height: 5, borderRadius: '50%', background: isLoading ? WS.gold : '#4CAF50', flexShrink: 0 }} />
+              <span style={{ fontSize: 11, fontWeight: 500, color: WS.txtPri, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {activeProject.name}
+              </span>
+              <span style={{ color: WS.borderHi, fontSize: 10 }}>·</span>
+              <span style={{ fontSize: 10, color: WS.txtMid }}>{currentShots.length} shots</span>
+              {isLoading && (
+                <>
+                  <span style={{ color: WS.borderHi, fontSize: 10 }}>·</span>
+                  <span style={{ fontSize: 10, color: WS.gold }}>{completedImagesCount}/{imagesToGenerateCount}</span>
+                </>
+              )}
+            </div>
+
+            {/* Tab icon pills */}
+            <div style={{ display: 'flex', gap: 2, background: WS.bg, borderRadius: 30, padding: 3 }}>
+              {([
+                { key: 'inputs' as const, title: 'Image Inputs', icon: (
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" style={{ width: 13, height: 13 }}><rect x="1" y="2" width="14" height="12" rx="1.5"/><circle cx="5" cy="7" r="1.5"/><path d="M1 12l3.5-3 3 2.5 3-3 4 3.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                )},
+                { key: 'settings' as const, title: 'Settings', icon: (
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" style={{ width: 13, height: 13 }}><circle cx="8" cy="8" r="2.5"/><path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.2 3.2l1 1M11.8 11.8l1 1M3.2 12.8l1-1M11.8 4.2l1-1" strokeLinecap="round"/></svg>
+                )},
+                { key: 'camera' as const, title: 'Camera', icon: (
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" style={{ width: 13, height: 13 }}><path d="M1 5.5A1.5 1.5 0 012.5 4h1.618l.894-1.789A1 1 0 016 1.75h4a1 1 0 01.894.553L11.882 4H13.5A1.5 1.5 0 0115 5.5v7A1.5 1.5 0 0113.5 14h-11A1.5 1.5 0 011 12.5v-7z"/><circle cx="8" cy="9" r="2.5"/></svg>
+                )},
+                { key: 'shots' as const, title: 'Shots', icon: (
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" style={{ width: 13, height: 13 }}><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
+                )},
+              ] as const).map(tab => (
+                <button
+                  key={tab.key}
+                  onClick={() => setWorkspaceTab(t => t === tab.key ? null : tab.key)}
+                  title={tab.title}
+                  style={{ width: 32, height: 32, borderRadius: 30, border: 'none', background: workspaceTab === tab.key ? WS.surfHi : 'transparent', color: workspaceTab === tab.key ? WS.gold : WS.txtMid, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'all 0.12s' }}
+                  onMouseEnter={e => { if (workspaceTab !== tab.key) (e.currentTarget as HTMLElement).style.color = WS.txtPri; }}
+                  onMouseLeave={e => { if (workspaceTab !== tab.key) (e.currentTarget as HTMLElement).style.color = WS.txtMid; }}
+                >
+                  {tab.icon}
+                </button>
+              ))}
+            </div>
+
+            {/* Error indicator */}
+            {error && (
+              <div style={{ fontSize: 9, color: '#E57373', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={error}>⚠ {error}</div>
+            )}
+
+            {/* Generate button */}
+            <button
+              onClick={handleGenerateTryOn}
+              disabled={!isFormValid || (apiProvider === 'google' ? !apiKey : !kieApiKey) || isLoading}
+              style={{ padding: '9px 22px', borderRadius: 40, background: isFormValid && (apiProvider === 'google' ? apiKey : kieApiKey) && !isLoading ? WS.gold : '#2A2622', color: isFormValid && (apiProvider === 'google' ? apiKey : kieApiKey) && !isLoading ? WS.bg : WS.txtMid, border: `1px solid ${isFormValid && (apiProvider === 'google' ? apiKey : kieApiKey) && !isLoading ? 'transparent' : WS.borderHi}`, fontSize: 11, fontWeight: 600, cursor: isFormValid && (apiProvider === 'google' ? apiKey : kieApiKey) && !isLoading ? 'pointer' : 'not-allowed', fontFamily: 'inherit', transition: 'all 0.15s', display: 'flex', alignItems: 'center', gap: 7 }}
+              onMouseEnter={e => { if (isFormValid && !isLoading) (e.currentTarget as HTMLElement).style.opacity = '0.88'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
+            >
+              {isLoading ? (
+                <>
+                  <div style={{ width: 11, height: 11, border: '1.5px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite', flexShrink: 0 }} />
+                  {completedImagesCount}/{imagesToGenerateCount}
+                </>
+              ) : (
+                <>
+                  <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 11, height: 11 }}><path d="M7 1l1.5 4.5L13 7l-4.5 1.5L7 13l-1.5-4.5L1 7l4.5-1.5L7 1z" strokeLinejoin="round"/></svg>
+                  Generate
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Edit bar (when images exist) ── */}
+      {displayedImages.some(img => img.status === 'success') && (
+        <div style={{ position: 'absolute', bottom: 80, left: 24, right: 24, zIndex: 30, pointerEvents: workspaceTab ? 'none' : 'auto', opacity: workspaceTab ? 0 : 1, transition: 'opacity 0.15s' }}>
+          <div style={{ maxWidth: 760, margin: '0 auto', background: WS.surface, border: `1px solid ${WS.border}`, borderRadius: 10, padding: 14, boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 10 }}>
+                  {ITEMS_TO_UPLOAD.map(item => {
+                    const key = item.key as keyof UploadedFiles;
+                    if (!uploadedFiles[key]) return null;
+                    const isSelected = editSelectedOriginalKeys.includes(key);
+                    return (
+                      <button key={key} onClick={() => toggleEditOriginalItem(key)} style={{ padding: '3px 9px', borderRadius: 20, fontSize: 9, fontWeight: 500, border: `1px solid ${isSelected ? WS.gold + '80' : WS.border}`, background: isSelected ? WS.gold + '12' : 'transparent', color: isSelected ? WS.gold : WS.txtSec, cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.1s' }}>
+                        {isSelected ? '✓ ' : ''}{item.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: WS.bg, borderRadius: 6, padding: '6px 10px', border: `1px solid ${WS.border}` }}>
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    {editCustomReferences.map(ref => (
+                      <div key={ref.id} style={{ position: 'relative', width: 28, height: 28 }}>
+                        <img src={`data:${ref.mimeType};base64,${ref.data}`} style={{ width: 28, height: 28, objectFit: 'cover', borderRadius: '50%', display: 'block' }} />
+                        <button onClick={() => handleEditRemoveReference(ref.id)} style={{ position: 'absolute', top: -3, right: -3, width: 13, height: 13, borderRadius: '50%', background: WS.borderHi, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: WS.txtPri, fontSize: 8 }}>×</button>
+                      </div>
+                    ))}
+                    <label style={{ width: 28, height: 28, borderRadius: '50%', background: WS.surfHi, border: `1px solid ${WS.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: WS.txtSec }}>
+                      <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 9, height: 9 }}><path d="M6 1v10M1 6h10" strokeLinecap="round"/></svg>
+                      <input type="file" accept="image/*" onChange={handleEditAddReference} style={{ display: 'none' }} />
+                    </label>
+                  </div>
+                  <div style={{ width: 1, height: 18, background: WS.border }} />
+                  <input type="text" value={editingPrompt} onChange={e => setEditingPrompt(e.target.value)} placeholder={selectedImageForEditIndex !== null ? "Describe your edit…" : "Select an image above to edit"} style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 11, color: WS.txtPri, fontFamily: 'inherit' }} disabled={selectedImageForEditIndex === null || isLoading} />
+                </div>
+              </div>
+              <button onClick={handleApplyEdit} disabled={selectedImageForEditIndex === null || isLoading} style={{ padding: '10px 18px', borderRadius: 6, background: selectedImageForEditIndex !== null && !isLoading ? WS.gold : WS.borderHi, color: selectedImageForEditIndex !== null && !isLoading ? WS.bg : WS.txtSec, border: 'none', fontSize: 11, fontWeight: 600, cursor: selectedImageForEditIndex !== null ? 'pointer' : 'not-allowed', fontFamily: 'inherit', alignSelf: 'flex-end', transition: 'all 0.12s' }}>
+                Apply
+              </button>
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Color Grading Modal */}
-        {gradingImageIndex !== null && gradingBase64 && (
-          <ColorGradingControl
-            originalImage={gradingBase64}
-            onApply={handleApplyColorGrading}
-            onPreview={handleColorGradingPreview}
-            onCancel={() => { setGradingImageIndex(null); setGradingBase64(null); }}
-          />
-        )}
-      </div>
+      {/* Color grading modal */}
+      {gradingImageIndex !== null && gradingBase64 && (
+        <ColorGradingControl
+          originalImage={gradingBase64}
+          onApply={handleApplyColorGrading}
+          onPreview={handleColorGradingPreview}
+          onCancel={() => { setGradingImageIndex(null); setGradingBase64(null); }}
+        />
+      )}
     </div>
   );
 }
