@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import { Project, ProjectAssets, AssetFile, GenerationBatch, GeneratedImage } from '../types';
+import { Project, ProjectAssets, AssetFile, GenerationBatch, GeneratedImage, SKU } from '../types';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -195,6 +195,7 @@ export async function saveGenerationBatch(batch: GenerationBatch): Promise<void>
   const { error } = await supabase.from('generation_batches').upsert({
     id:         batch.id,
     project_id: batch.projectId || null,
+    sku_id:     batch.skuId    || null,
     timestamp:  batch.timestamp,
     model:      batch.model,
     category:   batch.category,
@@ -257,6 +258,7 @@ export async function loadProjectBatches(projectId: string): Promise<GenerationB
   return (data || []).map(row => ({
     id:        row.id,
     projectId: row.project_id,
+    skuId:     row.sku_id     || undefined,
     timestamp: row.timestamp,
     model:     row.model,
     category:  row.category,
@@ -269,6 +271,103 @@ export async function loadProjectBatches(projectId: string): Promise<GenerationB
       url:            ir.storage_path ? publicUrl('generated-images', ir.storage_path) : undefined,
     })),
   }));
+}
+
+// ── SKUs ──────────────────────────────────────────────────────────────────────
+
+export async function loadProjectSKUs(projectId: string): Promise<SKU[]> {
+  const { data: skuRows, error } = await supabase
+    .from('skus')
+    .select('*')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: true });
+
+  if (error) { console.error('[db] loadProjectSKUs:', error.message); return []; }
+  if (!skuRows?.length) return [];
+
+  const skus: SKU[] = [];
+  await Promise.all(
+    skuRows.map(async row => {
+      const { data: assetRows } = await supabase
+        .from('sku_assets')
+        .select('*')
+        .eq('sku_id', row.id);
+
+      const productAssets: { [slotKey: string]: AssetFile } = {};
+      await Promise.all(
+        (assetRows || []).map(async (ar: Record<string, any>) => {
+          try {
+            const url = publicUrl('project-assets', ar.storage_path);
+            const { data, mimeType } = await downloadAsBase64(url);
+            productAssets[ar.slot_key] = { id: ar.sku_id + '-' + ar.slot_key, data, mimeType };
+          } catch (e) {
+            console.warn(`[db] Failed to load sku asset ${ar.sku_id}/${ar.slot_key}:`, e);
+          }
+        })
+      );
+
+      skus.push({
+        id: row.id,
+        projectId: row.project_id,
+        name: row.name,
+        skuCode: row.sku_code || undefined,
+        productAssets,
+        createdAt: row.created_at,
+      });
+    })
+  );
+
+  return skus.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+export async function saveSKU(sku: SKU): Promise<void> {
+  const { error } = await supabase.from('skus').upsert({
+    id:         sku.id,
+    project_id: sku.projectId,
+    name:       sku.name,
+    sku_code:   sku.skuCode || null,
+    created_at: sku.createdAt,
+  });
+  if (error) throw new Error(`[db] saveSKU: ${error.message}`);
+}
+
+export async function uploadSKUAsset(
+  skuId: string,
+  projectId: string,
+  slotKey: string,
+  base64: string,
+  mimeType: string,
+): Promise<AssetFile> {
+  const storagePath = `skus/${projectId}/${skuId}/${slotKey}.${safeExt(mimeType)}`;
+  const blob = await base64ToBlob(base64, mimeType);
+
+  const { error: upErr } = await supabase.storage
+    .from('project-assets')
+    .upload(storagePath, blob, { contentType: mimeType, upsert: true });
+  if (upErr) throw new Error(`[storage] uploadSKUAsset: ${upErr.message}`);
+
+  const { error: dbErr } = await supabase.from('sku_assets').upsert({
+    sku_id:       skuId,
+    slot_key:     slotKey,
+    storage_path: storagePath,
+    mime_type:    mimeType,
+  });
+  if (dbErr) throw new Error(`[db] saveSKUAsset: ${dbErr.message}`);
+
+  return { id: `${skuId}-${slotKey}`, data: base64, mimeType };
+}
+
+export async function deleteSKU(skuId: string): Promise<void> {
+  const { data: assetRows } = await supabase
+    .from('sku_assets')
+    .select('storage_path')
+    .eq('sku_id', skuId);
+
+  if (assetRows?.length) {
+    await supabase.storage.from('project-assets').remove(assetRows.map(r => r.storage_path));
+  }
+
+  await supabase.from('skus').delete().eq('id', skuId);
 }
 
 export async function deleteGenerationBatch(batchId: string): Promise<void> {

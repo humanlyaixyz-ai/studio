@@ -7,7 +7,7 @@ import ColorGradingControl from './components/ColorGradingControl';
 import CameraSettings from './components/CameraSettings';
 import { Dashboard } from './pages/Dashboard';
 import { CreateProject } from './pages/CreateProject';
-import { ModelType, UploadedFiles, GeneratedImage, ProductCategory, GenerationBatch, ActiveGenerationMeta, Project, StylingConfig, CameraConfig, ShotConfig, ApiProvider, AssetFile } from './types';
+import { ModelType, UploadedFiles, GeneratedImage, ProductCategory, GenerationBatch, ActiveGenerationMeta, Project, StylingConfig, CameraConfig, ShotConfig, ApiProvider, AssetFile, SKU } from './types';
 import { geminiService, refineImageDetails, setGeminiApiKey } from './services/geminiService';
 import { kieService, setKieApiKey } from './services/kieService';
 import * as db from './services/dbService';
@@ -57,6 +57,59 @@ function getAllSlotsForCategory(category: ProductCategory) {
   }).map(item => ({ key: item.key, label: item.label, required: isNonFashion ? item.key === 'productImage' : productKeys.has(item.key) }));
 }
 
+interface SKUAddFormProps {
+  productKeys: string[];
+  itemLabels: Record<string, string>;
+  ws: { border: string; gold: string; bg: string; surfHi: string; txtPri: string; txtSec: string };
+  onAdd: (name: string, code: string, assets: { [k: string]: { data: string; mimeType: string } }) => void;
+}
+function SKUAddForm({ productKeys, itemLabels, ws: WS, onAdd }: SKUAddFormProps) {
+  const [newName, setNewName] = useState('');
+  const [newCode, setNewCode] = useState('');
+  const [newAssets, setNewAssets] = useState<{ [k: string]: { data: string; mimeType: string } }>({});
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="SKU name (e.g. Navy Blue M)" style={{ flex: 2, background: 'transparent', border: `1px solid ${WS.border}`, borderRadius: 4, color: WS.txtPri, fontSize: 11, fontFamily: 'inherit', padding: '7px 10px', outline: 'none' }} onFocus={e => (e.target.style.borderColor = WS.gold)} onBlur={e => (e.target.style.borderColor = WS.border)} />
+        <input type="text" value={newCode} onChange={e => setNewCode(e.target.value)} placeholder="Code (opt.)" style={{ flex: 1, background: 'transparent', border: `1px solid ${WS.border}`, borderRadius: 4, color: WS.txtPri, fontSize: 11, fontFamily: 'inherit', padding: '7px 10px', outline: 'none' }} onFocus={e => (e.target.style.borderColor = WS.gold)} onBlur={e => (e.target.style.borderColor = WS.border)} />
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {productKeys.map(slotKey => {
+          const existing = newAssets[slotKey];
+          return (
+            <label key={slotKey} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+              <div style={{ width: 52, height: 52, borderRadius: 4, border: `1px dashed ${existing ? WS.gold : WS.border}`, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', background: existing ? 'transparent' : WS.bg }}>
+                {existing ? (
+                  <img src={`data:${existing.mimeType};base64,${existing.data}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt={slotKey} />
+                ) : (
+                  <svg viewBox="0 0 12 12" fill="none" stroke={WS.txtSec} strokeWidth="1.2" style={{ width: 14, height: 14 }}><path d="M6 2v8M2.5 5.5L6 2l3.5 3.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                )}
+              </div>
+              <span style={{ fontSize: 8, color: WS.txtSec }}>{itemLabels[slotKey] || slotKey}</span>
+              <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onloadend = () => setNewAssets(prev => ({ ...prev, [slotKey]: { data: (reader.result as string).split(',')[1], mimeType: file.type } }));
+                reader.readAsDataURL(file);
+              }} />
+            </label>
+          );
+        })}
+      </div>
+      <button
+        onClick={() => {
+          if (!newName.trim() && Object.keys(newAssets).length === 0) return;
+          onAdd(newName, newCode, newAssets);
+          setNewName(''); setNewCode(''); setNewAssets({});
+        }}
+        style={{ padding: '8px 18px', background: WS.gold, color: WS.bg, border: 'none', borderRadius: 4, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', alignSelf: 'flex-start', transition: 'opacity 0.12s' }}
+        onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')} onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
+      >Add SKU</button>
+    </div>
+  );
+}
+
 function App() {
   // --- Project State ---
   const [projects, setProjects] = useState<Project[]>([]);
@@ -66,7 +119,16 @@ function App() {
   const [isCreatingProject, setIsCreatingProject] = useState<boolean>(false);
   const [view, setView] = useState<'dashboard' | 'create' | 'workspace'>('dashboard');
   const [editingProject, setEditingProject] = useState<Project | null>(null);
-  const [workspaceTab, setWorkspaceTab] = useState<'inputs' | 'settings' | 'camera' | 'shots' | null>(null);
+  const [workspaceTab, setWorkspaceTab] = useState<'inputs' | 'settings' | 'camera' | 'shots' | 'skus' | null>(null);
+
+  // --- SKU State ---
+  const [skus, setSkus] = useState<SKU[]>([]);
+  const [activeSKUId, setActiveSKUId] = useState<string | null>(null);
+  const [bulkSelectedSKUIds, setBulkSelectedSKUIds] = useState<Set<string>>(new Set());
+  const [isBulkGenerating, setIsBulkGenerating] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number; skuName: string } | null>(null);
+  const [bulkRunBatchIds, setBulkRunBatchIds] = useState<string[]>([]);
+  const [viewingBulkRun, setViewingBulkRun] = useState(false);
 
   // --- Configuration State (Used for both Creation Form & Active Workspace) ---
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFiles>({});
@@ -134,6 +196,23 @@ function App() {
       .catch(e => console.error('[app] Failed to load projects:', e))
       .finally(() => setIsLoadingProjects(false));
   }, []);
+
+  // When active SKU changes, load its product assets into uploadedFiles (product slots only)
+  useEffect(() => {
+    if (!activeSKUId || !activeProject) return;
+    const sku = skus.find(s => s.id === activeSKUId);
+    if (!sku) return;
+    const productKeys = new Set<string>(PRODUCT_SLOT_KEYS[activeProject.category] || []);
+    setUploadedFiles(prev => {
+      const updated = { ...prev };
+      // Clear existing product slots, then fill from SKU
+      productKeys.forEach(k => delete updated[k as keyof UploadedFiles]);
+      Object.entries(sku.productAssets).forEach(([k, f]: [string, AssetFile]) => {
+        if (productKeys.has(k)) updated[k as keyof UploadedFiles] = { data: f.data, mimeType: f.mimeType };
+      });
+      return updated;
+    });
+  }, [activeSKUId, skus, activeProject]);
 
   // Update API Key
   useEffect(() => {
@@ -292,6 +371,8 @@ function App() {
     setActiveProject(project);
     setView('workspace');
     setGenerationHistory([]);
+    setSkus([]);
+    setActiveSKUId(null);
 
     // Sync config immediately
     setSelectedCategory(project.category);
@@ -319,13 +400,15 @@ function App() {
     setError(null);
     setUploadedFiles({});
 
-    // Load assets + history from Supabase in parallel
+    // Load assets + history + SKUs from Supabase in parallel
     setIsLoadingProject(true);
     try {
-      const [assets, history] = await Promise.all([
+      const [assets, history, loadedSkus] = await Promise.all([
         db.loadProjectAssets(project.id),
         db.loadProjectBatches(project.id),
+        db.loadProjectSKUs(project.id),
       ]);
+      setSkus(loadedSkus);
 
       setActiveProject(prev => prev ? { ...prev, assets } : prev);
       setGenerationHistory(history);
@@ -348,10 +431,141 @@ function App() {
     }
   };
 
+  // --- SKU Handlers ---
+
+  const handleSelectSKU = useCallback((skuId: string) => {
+    setActiveSKUId(prev => prev === skuId ? null : skuId);
+  }, []);
+
+  const handleAddSKU = useCallback(async (name: string, skuCode: string, productAssets: { [k: string]: { data: string; mimeType: string } }) => {
+    if (!activeProject) return;
+    const newSKU: SKU = {
+      id: `sku-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      projectId: activeProject.id,
+      name: name || `SKU ${skus.length + 1}`,
+      skuCode: skuCode || undefined,
+      productAssets: {},
+      createdAt: Date.now(),
+    };
+    setSkus(prev => [...prev, newSKU]);
+    setActiveSKUId(newSKU.id);
+    try {
+      await db.saveSKU(newSKU);
+      const uploadedAssets: { [k: string]: AssetFile } = {};
+      await Promise.all(
+        Object.entries(productAssets).map(async ([slotKey, f]) => {
+          const asset = await db.uploadSKUAsset(newSKU.id, activeProject.id, slotKey, f.data, f.mimeType);
+          uploadedAssets[slotKey] = asset;
+        })
+      );
+      setSkus(prev => prev.map(s => s.id === newSKU.id ? { ...s, productAssets: uploadedAssets } : s));
+    } catch (e) {
+      console.error('[app] handleAddSKU:', e);
+    }
+  }, [activeProject, skus]);
+
+  const handleBulkAddSKUs = useCallback(async (files: { name: string; data: string; mimeType: string }[], primarySlot: string) => {
+    if (!activeProject) return;
+    for (const file of files) {
+      const skuName = file.name.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
+      await handleAddSKU(skuName, '', { [primarySlot]: { data: file.data, mimeType: file.mimeType } });
+    }
+  }, [activeProject, handleAddSKU]);
+
+  const handleDeleteSKU = useCallback((skuId: string) => {
+    setSkus(prev => prev.filter(s => s.id !== skuId));
+    if (activeSKUId === skuId) setActiveSKUId(null);
+    setBulkSelectedSKUIds(prev => { const n = new Set(prev); n.delete(skuId); return n; });
+    db.deleteSKU(skuId).catch(e => console.error('[app] deleteSKU:', e));
+  }, [activeSKUId]);
+
+  const handleBulkGenerate = useCallback(async () => {
+    if (!activeProject || bulkSelectedSKUIds.size === 0) return;
+    if (apiProvider === 'google' && !apiKey) { setError('Gemini API Key required.'); return; }
+    if (apiProvider === 'kie' && !kieApiKey) { setError('Kie.ai API Key required.'); return; }
+
+    const selectedSKUs = skus.filter(s => bulkSelectedSKUIds.has(s.id));
+    const productKeys = new Set<string>(PRODUCT_SLOT_KEYS[selectedCategory] || []);
+
+    // Supporting assets from current uploadedFiles (non-product slots, shared across all SKUs)
+    const supportingAssets: UploadedFiles = {};
+    Object.entries(uploadedFiles).forEach(([k, v]) => {
+      if (!productKeys.has(k)) supportingAssets[k as keyof UploadedFiles] = v as UploadedFiles[keyof UploadedFiles];
+    });
+
+    setIsBulkGenerating(true);
+    setError(null);
+    setWorkspaceTab(null);
+    setViewingBulkRun(false);
+    const runBatchIds: string[] = [];
+
+    for (let i = 0; i < selectedSKUs.length; i++) {
+      const sku = selectedSKUs[i];
+      setBulkProgress({ current: i + 1, total: selectedSKUs.length, skuName: sku.name });
+
+      // Merge supporting assets + this SKU's product assets
+      const skuFiles: UploadedFiles = { ...supportingAssets };
+      Object.entries(sku.productAssets).forEach(([k, f]: [string, AssetFile]) => {
+        if (productKeys.has(k)) skuFiles[k as keyof UploadedFiles] = { data: f.data, mimeType: f.mimeType };
+      });
+
+      const batchId = `${Date.now()}-sku${i}`;
+      const tracker: GeneratedImage[] = currentShots.map((shot, idx) => ({
+        id: `${batchId}-${idx}`, prompt: shot.prompt, status: 'pending' as const,
+      }));
+
+      setLiveGenerationImages([...tracker]);
+      setViewingHistoryBatchId(null);
+
+      const localProgress = (index: number, update: Partial<GeneratedImage>) => {
+        tracker[index] = { ...tracker[index], ...update };
+        setLiveGenerationImages([...tracker]);
+      };
+
+      try {
+        const modelConfig = MODEL_CONFIGS[selectedModel];
+        if (apiProvider === 'kie') {
+          await kieService.generateTryOn(skuFiles.characterFace, skuFiles, modelConfig, currentShots, brandName, selectedCategory, activeProject.environment, activeProject.lighting, stylingConfig, cameraConfig, activeProject.negativePrompt, activeProject.seed, activeProject.fashionType, activeProject.mood, localProgress, batchId);
+        } else {
+          await geminiService.generateTryOn(skuFiles.characterFace, skuFiles, modelConfig, currentShots, brandName, selectedCategory, activeProject.environment, activeProject.lighting, stylingConfig, cameraConfig, activeProject.negativePrompt, activeProject.seed, activeProject.fashionType, activeProject.mood, localProgress);
+        }
+      } catch (e: any) {
+        tracker.forEach((img, idx) => {
+          if (img.status === 'pending' || img.status === 'generating') {
+            tracker[idx] = { ...img, status: 'failed', errorMessage: e.message || 'Generation failed' };
+          }
+        });
+        setLiveGenerationImages([...tracker]);
+      }
+
+      const completedBatch: GenerationBatch = {
+        id: batchId,
+        projectId: activeProject.id,
+        skuId: sku.id,
+        skuName: sku.name,
+        timestamp: Date.now(),
+        images: tracker,
+        model: selectedModel,
+        category: selectedCategory,
+      };
+      setGenerationHistory(prev => [completedBatch, ...prev]);
+      runBatchIds.push(batchId);
+      db.saveGenerationBatch(completedBatch).catch(e => console.error('[app] bulk saveGenerationBatch:', e));
+    }
+
+    setBulkRunBatchIds(runBatchIds);
+    setViewingBulkRun(true);
+    setViewingHistoryBatchId(null);
+    setIsBulkGenerating(false);
+    setBulkProgress(null);
+  }, [activeProject, bulkSelectedSKUIds, skus, selectedCategory, uploadedFiles, currentShots, selectedModel, brandName, stylingConfig, cameraConfig, apiProvider, apiKey, kieApiKey]);
+
   const handleBackToProjects = () => {
     setActiveProject(null);
     setIsCreatingProject(false);
     setView('dashboard');
+    setViewingBulkRun(false);
+    setBulkRunBatchIds([]);
   };
 
   const handleFileUpload = useCallback((key: keyof UploadedFiles, base64: string, mimeType: string) => {
@@ -484,6 +698,7 @@ function App() {
 
     setError(null);
     setIsLoading(true);
+    setViewingBulkRun(false);
 
     const newBatchId = Date.now().toString();
     setActiveGenerationMeta({
@@ -843,6 +1058,7 @@ function App() {
 
   const handleViewCurrentGeneration = useCallback(() => {
     setViewingHistoryBatchId(null);
+    setViewingBulkRun(false);
     if (outputPreviewRef.current) outputPreviewRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
 
@@ -957,6 +1173,7 @@ function App() {
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes spin-slow { to { transform: rotate(360deg); } }
         .ws-img-card:hover .ws-img-overlay { opacity: 1 !important; }
+        *:hover > .bulk-dl-btn, .bulk-dl-btn:hover { opacity: 1 !important; }
       `}</style>
 
       {/* ── Top slim bar ── */}
@@ -994,8 +1211,8 @@ function App() {
                 {projectHistory.map(batch => (
                   <button key={batch.id} onClick={() => handleViewHistoryBatch(batch.id)} style={{ width: '100%', textAlign: 'left', padding: '8px 10px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', borderRadius: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center', transition: 'background 0.1s' }} onMouseEnter={e => (e.currentTarget.style.background = WS.surfHi)} onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
                     <div>
-                      <div style={{ fontSize: 11, color: WS.txtPri, fontWeight: 500 }}>{new Date(parseInt(batch.id)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                      <div style={{ fontSize: 9, color: WS.txtSec }}>{batch.model.replace(/_/g, ' ')}</div>
+                      <div style={{ fontSize: 11, color: WS.txtPri, fontWeight: 500 }}>{batch.skuName || new Date(parseInt(batch.id)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                      <div style={{ fontSize: 9, color: WS.txtSec }}>{batch.skuName ? new Date(batch.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' · ' : ''}{batch.model.replace(/_/g, ' ')}</div>
                     </div>
                     <svg viewBox="0 0 12 12" fill="none" stroke={WS.txtSec} strokeWidth="1.4" style={{ width: 10, height: 10 }}><path d="M2 6h8M7 3l3 3-3 3" strokeLinecap="round" strokeLinejoin="round"/></svg>
                   </button>
@@ -1005,7 +1222,13 @@ function App() {
             </div>
           )}
 
-          {viewingHistoryBatchId && (
+          {bulkRunBatchIds.length > 0 && !viewingBulkRun && (
+            <button onClick={() => { setViewingBulkRun(true); setViewingHistoryBatchId(null); }} style={{ fontSize: 10, color: WS.gold, background: 'none', border: `1px solid ${WS.border}`, borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 5 }}>
+              <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4" style={{ width: 8, height: 8 }}><rect x="1" y="1" width="3.5" height="3.5" rx="0.5"/><rect x="5.5" y="1" width="3.5" height="3.5" rx="0.5"/><rect x="1" y="5.5" width="3.5" height="3.5" rx="0.5"/><rect x="5.5" y="5.5" width="3.5" height="3.5" rx="0.5"/></svg>
+              Bulk Results
+            </button>
+          )}
+          {(viewingHistoryBatchId || viewingBulkRun) && (
             <button onClick={handleViewCurrentGeneration} style={{ fontSize: 10, color: WS.gold, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>← Live</button>
           )}
 
@@ -1036,7 +1259,7 @@ function App() {
         )}
 
         {/* Empty: project but no images */}
-        {activeProject && displayedImages.length === 0 && !isLoading && !isLoadingProject && (
+        {activeProject && displayedImages.length === 0 && !isLoading && !isLoadingProject && !viewingBulkRun && !isBulkGenerating && (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
             <div style={{ width: 64, height: 64, borderRadius: '50%', border: `1px solid ${WS.borderHi}`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 20 }}>
               <svg viewBox="0 0 24 24" fill="none" stroke={WS.txtSec} strokeWidth="1" style={{ width: 28, height: 28 }}><path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z"/><path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM18.75 10.5h.008v.008h-.008V10.5z"/></svg>
@@ -1055,8 +1278,69 @@ function App() {
           </div>
         )}
 
+        {/* ── Bulk Results grouped view ── */}
+        {viewingBulkRun && bulkRunBatchIds.length > 0 && (() => {
+          const bulkBatches = bulkRunBatchIds
+            .map(id => generationHistory.find(b => b.id === id))
+            .filter(Boolean) as GenerationBatch[];
+          return (
+            <div style={{ padding: 24 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+                <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 18, fontStyle: 'italic', color: WS.txtPri }}>Bulk Results</span>
+                <span style={{ fontSize: 10, color: WS.txtSec }}>{bulkBatches.length} SKU{bulkBatches.length !== 1 ? 's' : ''} · {bulkBatches.reduce((sum, b) => sum + b.images.filter(i => i.status === 'success').length, 0)} images generated</span>
+              </div>
+              {bulkBatches.map(batch => {
+                const successCount = batch.images.filter(i => i.status === 'success').length;
+                return (
+                  <div key={batch.id} style={{ marginBottom: 28 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, paddingBottom: 8, borderBottom: `1px solid ${WS.border}` }}>
+                      <div style={{ width: 6, height: 6, borderRadius: '50%', background: successCount > 0 ? '#4CAF50' : '#E57373', flexShrink: 0 }} />
+                      <span style={{ fontSize: 12, fontWeight: 500, color: WS.txtPri }}>{batch.skuName || 'SKU'}</span>
+                      <span style={{ fontSize: 9, color: WS.txtSec }}>{successCount}/{batch.images.length} shots</span>
+                      <button onClick={() => { setViewingBulkRun(false); handleViewHistoryBatch(batch.id); }} style={{ marginLeft: 'auto', fontSize: 9, color: WS.txtSec, background: 'none', border: `1px solid ${WS.border}`, borderRadius: 3, cursor: 'pointer', padding: '3px 8px', fontFamily: 'inherit', transition: 'color 0.1s' }} onMouseEnter={e => (e.currentTarget.style.color = WS.txtPri)} onMouseLeave={e => (e.currentTarget.style.color = WS.txtSec)}>View full →</button>
+                    </div>
+                    <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 4 }}>
+                      {batch.images.map((image, index) => (
+                        <div key={image.id} style={{ flexShrink: 0, width: 140 }}>
+                          <div style={{ aspectRatio: '3/4', background: WS.surfHi, borderRadius: 6, overflow: 'hidden', border: `1px solid ${WS.border}`, position: 'relative' }}>
+                            {image.url ? (
+                              <img src={image.url} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} alt={`${batch.skuName} shot ${index + 1}`} />
+                            ) : (
+                              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                {image.status === 'failed' ? <span style={{ fontSize: 9, color: '#E57373', textAlign: 'center', padding: '0 8px' }}>Failed</span> : <span style={{ fontSize: 9, color: WS.txtSec }}>–</span>}
+                              </div>
+                            )}
+                            {image.url && image.status === 'success' && (
+                              <button onClick={() => handleDownloadImage(image.url, `${batch.skuName}_Shot_${String(index+1).padStart(2,'0')}.jpg`)} style={{ position: 'absolute', bottom: 6, right: 6, width: 26, height: 26, borderRadius: '50%', background: 'rgba(0,0,0,0.6)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0, transition: 'opacity 0.15s' }} className="bulk-dl-btn">
+                                <svg viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="1.5" style={{ width: 10, height: 10 }}><path d="M2 9v1.5a.5.5 0 00.5.5h7a.5.5 0 00.5-.5V9" strokeLinecap="round"/><path d="M6 1v7M4 6l2 2 2-2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                              </button>
+                            )}
+                          </div>
+                          <div style={{ marginTop: 4, fontSize: 8, color: WS.txtSec, textAlign: 'center' }}>Shot {index + 1}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
+
+        {/* ── Bulk-generating live progress ── */}
+        {isBulkGenerating && bulkProgress && (
+          <div style={{ padding: '16px 24px 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+              <div style={{ width: 9, height: 9, border: `1.5px solid ${WS.gold}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite', flexShrink: 0 }} />
+              <span style={{ fontSize: 11, color: WS.txtMid }}>Generating</span>
+              <span style={{ fontSize: 11, fontWeight: 500, color: WS.txtPri }}>{bulkProgress.skuName}</span>
+              <span style={{ fontSize: 10, color: WS.txtSec }}>{bulkProgress.current}/{bulkProgress.total}</span>
+            </div>
+          </div>
+        )}
+
         {/* Images grid */}
-        {displayedImages.length > 0 && (
+        {!viewingBulkRun && displayedImages.length > 0 && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 16, padding: 24 }}>
             {displayedImages.map((image, index) => (
               <div key={image.id} className="ws-img-card" style={{ position: 'relative' }}>
@@ -1119,7 +1403,7 @@ function App() {
           {/* Panel header */}
           <div style={{ padding: '11px 20px', borderBottom: `1px solid ${WS.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
             <span style={{ fontSize: 10, fontWeight: 500, color: WS.txtSec, letterSpacing: '0.08em', textTransform: 'uppercase' as const }}>
-              {workspaceTab === 'inputs' ? 'Image Inputs' : workspaceTab === 'settings' ? 'Settings' : workspaceTab === 'camera' ? 'Camera' : 'Shot List'}
+              {workspaceTab === 'inputs' ? 'Image Inputs' : workspaceTab === 'settings' ? 'Settings' : workspaceTab === 'camera' ? 'Camera' : workspaceTab === 'shots' ? 'Shot List' : 'SKUs'}
             </span>
             <button onClick={() => setWorkspaceTab(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: WS.txtSec, width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 3, transition: 'color 0.1s' }} onMouseEnter={e => (e.currentTarget.style.color = WS.txtPri)} onMouseLeave={e => (e.currentTarget.style.color = WS.txtSec)}>
               <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 10, height: 10 }}><path d="M2 2l8 8M10 2l-8 8" strokeLinecap="round"/></svg>
@@ -1236,6 +1520,108 @@ function App() {
                 onShotsChange={setCurrentShots}
               />
             )}
+
+            {/* SKUS TAB */}
+            {workspaceTab === 'skus' && (() => {
+              const productKeys = PRODUCT_SLOT_KEYS[selectedCategory] || [];
+              const primarySlot = productKeys[0] || 'productImage';
+              const primaryLabel = ITEM_LABELS[primarySlot] || primarySlot;
+
+              return (
+                <div>
+                  {/* SKU grid header */}
+                  {skus.length > 0 && (
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <span style={{ fontSize: 10, color: WS.txtSec }}>{skus.length} SKU{skus.length !== 1 ? 's' : ''}</span>
+                          <button onClick={() => setBulkSelectedSKUIds(bulkSelectedSKUIds.size === skus.length ? new Set() : new Set(skus.map(s => s.id)))} style={{ fontSize: 9, color: WS.txtSec, background: 'none', border: `1px solid ${WS.border}`, borderRadius: 3, cursor: 'pointer', padding: '3px 8px', fontFamily: 'inherit', transition: 'color 0.1s' }} onMouseEnter={e => (e.currentTarget.style.color = WS.txtPri)} onMouseLeave={e => (e.currentTarget.style.color = WS.txtSec)}>
+                            {bulkSelectedSKUIds.size === skus.length ? 'Deselect all' : 'Select all'}
+                          </button>
+                          {bulkSelectedSKUIds.size > 0 && (
+                            <span style={{ fontSize: 9, color: WS.gold }}>{bulkSelectedSKUIds.size} selected</span>
+                          )}
+                        </div>
+                        {bulkSelectedSKUIds.size > 0 && (
+                          <button
+                            onClick={handleBulkGenerate}
+                            disabled={isBulkGenerating}
+                            style={{ padding: '7px 16px', background: WS.gold, color: WS.bg, border: 'none', borderRadius: 20, fontSize: 10, fontWeight: 600, cursor: isBulkGenerating ? 'not-allowed' : 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6, opacity: isBulkGenerating ? 0.6 : 1, transition: 'opacity 0.12s' }}
+                          >
+                            {isBulkGenerating ? (
+                              <><div style={{ width: 9, height: 9, border: '1.5px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />{bulkProgress?.current}/{bulkProgress?.total}</>
+                            ) : (
+                              <><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 10, height: 10 }}><path d="M6 1l1.2 3.5L11 6l-3.8 1.5L6 11l-1.2-3.5L1 6l3.8-1.5L6 1z" strokeLinejoin="round"/></svg>Generate {bulkSelectedSKUIds.size} SKU{bulkSelectedSKUIds.size !== 1 ? 's' : ''}</>
+                            )}
+                          </button>
+                        )}
+                      </div>
+
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 20 }}>
+                        {skus.map(sku => {
+                          const isActive = activeSKUId === sku.id;
+                          const isSelected = bulkSelectedSKUIds.has(sku.id);
+                          const thumb = sku.productAssets[primarySlot];
+                          return (
+                            <div key={sku.id} style={{ position: 'relative' }}>
+                              {/* Bulk select checkbox */}
+                              <button
+                                onClick={() => setBulkSelectedSKUIds(prev => { const n = new Set(prev); isSelected ? n.delete(sku.id) : n.add(sku.id); return n; })}
+                                style={{ position: 'absolute', top: 2, left: 2, zIndex: 2, width: 16, height: 16, borderRadius: 3, border: `1.5px solid ${isSelected ? WS.gold : WS.border}`, background: isSelected ? WS.gold : WS.surfHi, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.1s' }}
+                                title={isSelected ? 'Deselect' : 'Select for bulk generate'}
+                              >
+                                {isSelected && <svg viewBox="0 0 10 10" fill="none" stroke={WS.bg} strokeWidth="1.8" style={{ width: 8, height: 8 }}><path d="M2 5l2.5 2.5L8 3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                              </button>
+                              <button
+                                onClick={() => handleSelectSKU(sku.id)}
+                                style={{ width: 90, background: 'none', border: `2px solid ${isActive ? WS.gold : isSelected ? WS.gold + '50' : WS.border}`, borderRadius: 6, cursor: 'pointer', padding: 6, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, transition: 'border-color 0.12s' }}
+                                title="Use this SKU's assets for generation"
+                              >
+                                <div style={{ width: 68, height: 68, borderRadius: 4, background: WS.surfHi, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  {thumb ? (
+                                    <img src={`data:${thumb.mimeType};base64,${thumb.data}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt={sku.name} />
+                                  ) : (
+                                    <svg viewBox="0 0 16 16" fill="none" stroke={WS.txtSec} strokeWidth="1.2" style={{ width: 20, height: 20 }}><rect x="1" y="2" width="14" height="12" rx="1.5"/><path d="M1 11l3.5-3 3 2.5 3-3 4 3.5" strokeLinecap="round"/></svg>
+                                  )}
+                                </div>
+                                <div style={{ fontSize: 9, color: isActive ? WS.gold : WS.txtSec, textAlign: 'center', wordBreak: 'break-word', lineHeight: 1.3, maxWidth: 76 }}>{sku.name}</div>
+                                {sku.skuCode && <div style={{ fontSize: 8, color: WS.txtSec, fontVariantNumeric: 'tabular-nums' }}>{sku.skuCode}</div>}
+                              </button>
+                              <button onClick={() => handleDeleteSKU(sku.id)} style={{ position: 'absolute', top: -4, right: -4, width: 16, height: 16, borderRadius: '50%', background: WS.borderHi, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: WS.txtSec, fontSize: 9 }} title="Delete SKU">×</button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Bulk add */}
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 10, color: WS.txtSec, marginBottom: 8 }}>Bulk add — one SKU per image ({primaryLabel})</div>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 14px', border: `1px dashed ${WS.border}`, borderRadius: 6, cursor: 'pointer', fontSize: 10, color: WS.txtMid, transition: 'border-color 0.12s' }} onMouseEnter={e => (e.currentTarget.style.borderColor = WS.borderHi)} onMouseLeave={e => (e.currentTarget.style.borderColor = WS.border)}>
+                      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" style={{ width: 12, height: 12 }}><path d="M7 1v8M4.5 3.5L7 1l2.5 2.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M2 10v2a1 1 0 001 1h8a1 1 0 001-1v-2" strokeLinecap="round"/></svg>
+                      Upload multiple images
+                      <input type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={async e => {
+                        const files = Array.from(e.target.files || []);
+                        const parsed = await Promise.all(files.map((f: File) => new Promise<{ name: string; data: string; mimeType: string }>(res => {
+                          const reader = new FileReader();
+                          reader.onloadend = () => res({ name: f.name, data: (reader.result as string).split(',')[1], mimeType: f.type });
+                          reader.readAsDataURL(f as Blob);
+                        })));
+                        await handleBulkAddSKUs(parsed, primarySlot);
+                        e.target.value = '';
+                      }} />
+                    </label>
+                  </div>
+
+                  {/* Manual add form */}
+                  <div style={{ background: WS.surfHi, borderRadius: 8, padding: 14, maxWidth: 400 }}>
+                    <div style={{ fontSize: 10, color: WS.txtSec, marginBottom: 12, letterSpacing: '0.06em' }}>ADD SINGLE SKU</div>
+                    <SKUAddForm productKeys={productKeys} itemLabels={ITEM_LABELS} ws={WS} onAdd={(name, code, assets) => handleAddSKU(name, code, assets)} />
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -1253,6 +1639,9 @@ function App() {
               </span>
               <span style={{ color: WS.borderHi, fontSize: 10 }}>·</span>
               <span style={{ fontSize: 10, color: WS.txtMid }}>{currentShots.length} shots</span>
+              {isBulkGenerating && bulkProgress ? (
+                <><span style={{ color: WS.borderHi, fontSize: 10 }}>·</span><span style={{ fontSize: 10, color: WS.gold }}>Bulk {bulkProgress.current}/{bulkProgress.total}: {bulkProgress.skuName}</span></>
+              ) : activeSKUId ? (() => { const s = skus.find(x => x.id === activeSKUId); return s ? (<><span style={{ color: WS.borderHi, fontSize: 10 }}>·</span><span style={{ fontSize: 10, color: WS.gold }}>{s.name}</span></>) : null; })() : null}
               {isLoading && (
                 <>
                   <span style={{ color: WS.borderHi, fontSize: 10 }}>·</span>
@@ -1275,6 +1664,9 @@ function App() {
                 )},
                 { key: 'shots' as const, title: 'Shots', icon: (
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" style={{ width: 13, height: 13 }}><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
+                )},
+                { key: 'skus' as const, title: `SKUs${skus.length > 0 ? ` (${skus.length})` : ''}`, icon: (
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" style={{ width: 13, height: 13 }}><path d="M2 4h12M2 8h12M2 12h12" strokeLinecap="round"/><path d="M5 2v12" strokeLinecap="round" strokeOpacity="0.5"/></svg>
                 )},
               ] as const).map(tab => (
                 <button

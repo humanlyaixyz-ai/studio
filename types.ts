@@ -69,6 +69,8 @@ export interface ActiveGenerationMeta {
 export interface GenerationBatch {
   id: string;
   projectId?: string;
+  skuId?: string;
+  skuName?: string;
   timestamp: number;
   images: GeneratedImage[];
   model: ModelType;
@@ -133,3 +135,12 @@ export interface FunctionCallResponse {
 }
 
 export type ApiProvider = 'google' | 'kie';
+
+export interface SKU {
+  id: string;
+  projectId: string;
+  name: string;
+  skuCode?: string;
+  productAssets: { [slotKey: string]: AssetFile };
+  createdAt: number;
+}
