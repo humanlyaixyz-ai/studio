@@ -55,7 +55,7 @@ function rowToProject(row: Record<string, any>): Project {
 
 export async function loadProjects(): Promise<Project[]> {
   const { data, error } = await supabase
-    .from('click_projects')
+    .from('projects')
     .select('*')
     .order('created_at', { ascending: false });
 
@@ -64,7 +64,7 @@ export async function loadProjects(): Promise<Project[]> {
 }
 
 export async function saveProject(project: Project): Promise<void> {
-  const { error } = await supabase.from('click_projects').upsert({
+  const { error } = await supabase.from('projects').upsert({
     id:              project.id,
     name:            project.name,
     created_at:      project.createdAt,
@@ -85,7 +85,7 @@ export async function saveProject(project: Project): Promise<void> {
 export async function deleteProject(id: string): Promise<void> {
   // Collect and delete asset storage files
   const { data: assetRows } = await supabase
-    .from('click_project_assets')
+    .from('project_assets')
     .select('storage_path')
     .eq('project_id', id);
 
@@ -95,13 +95,13 @@ export async function deleteProject(id: string): Promise<void> {
 
   // Collect and delete generated image storage files
   const { data: batches } = await supabase
-    .from('click_generation_batches')
+    .from('generation_batches')
     .select('id')
     .eq('project_id', id);
 
   if (batches?.length) {
     const { data: imgRows } = await supabase
-      .from('click_generated_images')
+      .from('generated_images')
       .select('storage_path')
       .in('batch_id', batches.map(b => b.id))
       .not('storage_path', 'is', null);
@@ -113,7 +113,7 @@ export async function deleteProject(id: string): Promise<void> {
     }
   }
 
-  const { error } = await supabase.from('click_projects').delete().eq('id', id);
+  const { error } = await supabase.from('projects').delete().eq('id', id);
   if (error) throw new Error(`[db] deleteProject: ${error.message}`);
 }
 
@@ -150,7 +150,7 @@ export async function uploadAndSaveAsset(
     .upload(storagePath, blob, { contentType: mimeType, upsert: true });
   if (upErr) throw new Error(`[storage] uploadAsset: ${upErr.message}`);
 
-  const { error: dbErr } = await supabase.from('click_project_assets').upsert({
+  const { error: dbErr } = await supabase.from('project_assets').upsert({
     id:           assetId,
     project_id:   projectId,
     slot_key:     slotKey,
@@ -164,7 +164,7 @@ export async function uploadAndSaveAsset(
 
 export async function loadProjectAssets(projectId: string): Promise<ProjectAssets> {
   const { data: rows, error } = await supabase
-    .from('click_project_assets')
+    .from('project_assets')
     .select('*')
     .eq('project_id', projectId);
 
@@ -192,7 +192,7 @@ export async function loadProjectAssets(projectId: string): Promise<ProjectAsset
 // ── Generation Batches ────────────────────────────────────────────────────────
 
 export async function saveGenerationBatch(batch: GenerationBatch): Promise<void> {
-  const { error } = await supabase.from('click_generation_batches').upsert({
+  const { error } = await supabase.from('generation_batches').upsert({
     id:         batch.id,
     project_id: batch.projectId || null,
     timestamp:  batch.timestamp,
@@ -234,7 +234,7 @@ async function saveGeneratedImage(batchId: string, img: GeneratedImage): Promise
     }
   }
 
-  await supabase.from('click_generated_images').upsert({
+  await supabase.from('generated_images').upsert({
     id:              img.id,
     batch_id:        batchId,
     status:          img.status,
@@ -247,7 +247,7 @@ async function saveGeneratedImage(batchId: string, img: GeneratedImage): Promise
 
 export async function loadProjectBatches(projectId: string): Promise<GenerationBatch[]> {
   const { data, error } = await supabase
-    .from('click_generation_batches')
+    .from('generation_batches')
     .select('*, generated_images(*)')
     .eq('project_id', projectId)
     .order('timestamp', { ascending: false });
@@ -273,7 +273,7 @@ export async function loadProjectBatches(projectId: string): Promise<GenerationB
 
 export async function deleteGenerationBatch(batchId: string): Promise<void> {
   const { data: imgRows } = await supabase
-    .from('click_generated_images')
+    .from('generated_images')
     .select('storage_path')
     .eq('batch_id', batchId)
     .not('storage_path', 'is', null);
@@ -284,5 +284,5 @@ export async function deleteGenerationBatch(batchId: string): Promise<void> {
       .remove(imgRows.map(r => r.storage_path).filter(Boolean));
   }
 
-  await supabase.from('click_generation_batches').delete().eq('id', batchId);
+  await supabase.from('generation_batches').delete().eq('id', batchId);
 }
