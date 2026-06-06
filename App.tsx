@@ -49,7 +49,9 @@ const ITEM_LABELS: Record<string, string> = Object.fromEntries(
 function getAllSlotsForCategory(category: ProductCategory) {
   const isNonFashion = NON_FASHION_CATEGORIES.includes(category);
   const isSaree = category === ProductCategory.SAREE;
-  const productKeys = new Set(PRODUCT_SLOT_KEYS[category] || []);
+  const productKeys = new Set(
+    PRODUCT_SLOT_KEYS[category] || (isNonFashion ? ['productImage'] : [])
+  );
   const sareeFields = ['drape', 'blouse', 'accessory1', 'accessory2'];
   return ITEMS_TO_UPLOAD.filter(item => {
     if (!isSaree && sareeFields.includes(item.key)) return false;
@@ -498,7 +500,10 @@ function App() {
 
     const selectedSKUs = skus.filter(s => bulkSelectedSKUIds.has(s.id));
     const runId = `bulk-${Date.now()}`;
-    const productKeys = new Set<string>(PRODUCT_SLOT_KEYS[selectedCategory] || []);
+    const productKeys = new Set<string>(
+      PRODUCT_SLOT_KEYS[selectedCategory] ||
+      (NON_FASHION_CATEGORIES.includes(selectedCategory) ? ['productImage'] : [])
+    );
 
     const supportingAssets: UploadedFiles = {};
     Object.entries(uploadedFiles).forEach(([k, v]) => {
@@ -591,7 +596,10 @@ function App() {
     const batch = generationHistory.find(b => b.id === batchId);
     if (!batch || !activeProject) return;
 
-    const productKeys = new Set<string>(PRODUCT_SLOT_KEYS[selectedCategory] || []);
+    const productKeys = new Set<string>(
+      PRODUCT_SLOT_KEYS[selectedCategory] ||
+      (NON_FASHION_CATEGORIES.includes(selectedCategory) ? ['productImage'] : [])
+    );
     const sku = batch.skuId ? skus.find(s => s.id === batch.skuId) : null;
 
     const supportingAssets: UploadedFiles = {};
@@ -1294,7 +1302,10 @@ function App() {
 
       {/* ── Bulk confirm overlay ── */}
       {showBulkOverlay && activeProject && (() => {
-        const productKeys = new Set<string>(PRODUCT_SLOT_KEYS[selectedCategory] || []);
+        const productKeys = new Set<string>(
+          PRODUCT_SLOT_KEYS[selectedCategory] ||
+          (NON_FASHION_CATEGORIES.includes(selectedCategory) ? ['productImage'] : [])
+        );
         const supportingSlots = getAllSlotsForCategory(selectedCategory)
           .filter(s => !productKeys.has(s.key));
         const primarySlot = (PRODUCT_SLOT_KEYS[selectedCategory] || [])[0] || 'productImage';
@@ -1442,7 +1453,8 @@ function App() {
 
             {/* SKUS TAB */}
             {workspaceTab === 'skus' && (() => {
-              const productKeys = PRODUCT_SLOT_KEYS[selectedCategory] || [];
+              const productKeys = PRODUCT_SLOT_KEYS[selectedCategory] ||
+                (NON_FASHION_CATEGORIES.includes(selectedCategory) ? ['productImage'] : []);
               const primarySlot = productKeys[0] || 'productImage';
               const primaryLabel = ITEM_LABELS[primarySlot] || primarySlot;
               const allSelected = skus.length > 0 && bulkSelectedSKUIds.size === skus.length;
