@@ -423,6 +423,8 @@ function App() {
       // Use Supabase assets if available; fall back to in-memory (race on new projects)
       const finalAssets = Object.keys(assets).length > 0 ? assets : (inMemoryAssets ?? {});
       setActiveProject(prev => prev ? { ...prev, assets: finalAssets } : prev);
+      // Cache assets into the projects list so Dashboard cards can show product thumbnails
+      setProjects(prev => prev.map(p => p.id === project.id ? { ...p, assets: finalAssets } : p));
       setGenerationHistory(history);
 
       // Pre-populate uploadedFiles from ALL project-level assets (product + supporting).

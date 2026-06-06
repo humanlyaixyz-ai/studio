@@ -1,5 +1,31 @@
 import React, { useState } from 'react';
-import { Project, ModelType } from '../types';
+import { Project, ModelType, ProductCategory, AssetFile, ProjectAssets } from '../types';
+
+const PRODUCT_SLOTS: Partial<Record<ProductCategory, string[]>> = {
+  [ProductCategory.TOP]:     ['topFront', 'topBack'],
+  [ProductCategory.JACKET]:  ['topFront', 'topBack'],
+  [ProductCategory.COAT]:    ['topFront', 'topBack'],
+  [ProductCategory.SWEATER]: ['topFront', 'topBack'],
+  [ProductCategory.ETHNIC]:  ['topFront', 'topBack'],
+  [ProductCategory.BOTTOM]:  ['bottomFront', 'bottomBack'],
+  [ProductCategory.DRESS]:   ['topFront', 'bottomFront'],
+  [ProductCategory.SAREE]:   ['drape', 'blouse'],
+  [ProductCategory.SHOES]:       ['shoes'],
+  [ProductCategory.ACCESSORIES]: ['accessories'],
+};
+
+function getProductImages(project: Project): AssetFile[] {
+  const assets: ProjectAssets = project.assets || {};
+  const slots = PRODUCT_SLOTS[project.category] || ['productImage'];
+  const seen = new Set<string>();
+  const result: AssetFile[] = [];
+  for (const slot of slots) {
+    for (const file of (assets[slot] || [])) {
+      if (!seen.has(file.id)) { seen.add(file.id); result.push(file); }
+    }
+  }
+  return result;
+}
 
 interface DashboardProps {
   projects: Project[];
@@ -210,12 +236,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
           {/* Project cards */}
           {projects.map(project => {
             const accent = MODEL_ACCENTS[project.model];
+            const productImgs = getProductImages(project);
+            const hasImages = productImgs.length > 0;
             return (
               <div
                 key={project.id}
                 onClick={() => onOpenProject(project)}
                 style={{
-                  height: 200, borderRadius: 3,
+                  borderRadius: 4,
                   border: `1px solid ${T.border}`,
                   background: T.surface,
                   cursor: 'pointer', position: 'relative',
@@ -227,47 +255,105 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = T.border; (e.currentTarget as HTMLElement).style.background = T.surface; }}
               >
                 {/* Visual area */}
-                <div style={{ flex: 1, background: `linear-gradient(135deg, #0D0C0B 0%, #111010 100%)`, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-                  {/* Accent dot top-left */}
-                  <div style={{ position: 'absolute', top: 12, left: 12, width: 5, height: 5, borderRadius: '50%', background: accent, opacity: 0.6 }} />
-                  {/* Placeholder grid */}
-                  <svg viewBox="0 0 48 36" fill="none" style={{ width: 48, height: 36, opacity: 0.18 }}>
-                    <rect x="0.5" y="0.5" width="47" height="35" rx="1.5" stroke="#E8E3DC" />
-                    <circle cx="9" cy="10" r="2.5" stroke="#E8E3DC" />
-                    <path d="M0 26l12-8 8 5 12-10 16 13" stroke="#E8E3DC" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
+                <div style={{ height: 160, background: T.bg, position: 'relative', overflow: 'hidden', display: 'flex' }}>
+                  {hasImages ? (
+                    productImgs.length === 1 ? (
+                      /* Single image — fill card */
+                      <img
+                        src={`data:${productImgs[0].mimeType};base64,${productImgs[0].data}`}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                        alt=""
+                      />
+                    ) : productImgs.length === 2 ? (
+                      /* Two images side by side */
+                      <>
+                        {productImgs.slice(0, 2).map((f, i) => (
+                          <div key={f.id} style={{ flex: 1, overflow: 'hidden', borderRight: i === 0 ? `1px solid ${T.border}` : 'none' }}>
+                            <img src={`data:${f.mimeType};base64,${f.data}`} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} alt="" />
+                          </div>
+                        ))}
+                      </>
+                    ) : productImgs.length === 3 ? (
+                      /* Three: large left + two small right */
+                      <>
+                        <div style={{ flex: 2, overflow: 'hidden', borderRight: `1px solid ${T.border}` }}>
+                          <img src={`data:${productImgs[0].mimeType};base64,${productImgs[0].data}`} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} alt="" />
+                        </div>
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                          {productImgs.slice(1, 3).map((f, i) => (
+                            <div key={f.id} style={{ flex: 1, overflow: 'hidden', borderBottom: i === 0 ? `1px solid ${T.border}` : 'none' }}>
+                              <img src={`data:${f.mimeType};base64,${f.data}`} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} alt="" />
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      /* 4+ images: 2×2 grid, overflow count badge */
+                      <>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', width: '100%', height: '100%', gap: 1, background: T.border }}>
+                          {productImgs.slice(0, 4).map((f, i) => (
+                            <div key={f.id} style={{ overflow: 'hidden', position: 'relative' }}>
+                              <img src={`data:${f.mimeType};base64,${f.data}`} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} alt="" />
+                              {i === 3 && productImgs.length > 4 && (
+                                <div style={{ position: 'absolute', inset: 0, background: 'rgba(10,9,8,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  <span style={{ fontSize: 13, fontWeight: 600, color: T.txtPri }}>+{productImgs.length - 4}</span>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )
+                  ) : (
+                    /* No assets yet */
+                    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: `linear-gradient(135deg, #0D0C0B 0%, #111010 100%)` }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, opacity: 0.3 }}>
+                        <svg viewBox="0 0 40 30" fill="none" style={{ width: 40, height: 30 }}>
+                          <rect x="0.5" y="0.5" width="39" height="29" rx="1.5" stroke="#E8E3DC" />
+                          <circle cx="7.5" cy="8" r="2" stroke="#E8E3DC" />
+                          <path d="M0 21l10-6.5 6.5 4 10-8 13 10.5" stroke="#E8E3DC" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        <span style={{ fontSize: 9, color: T.txtSec, fontFamily: 'inherit' }}>No assets yet</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Gradient overlay at bottom for legibility */}
+                  {hasImages && (
+                    <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 40, background: 'linear-gradient(to top, rgba(10,9,8,0.7) 0%, transparent 100%)', pointerEvents: 'none' }} />
+                  )}
+
+                  {/* Accent dot */}
+                  <div style={{ position: 'absolute', top: 10, left: 10, width: 6, height: 6, borderRadius: '50%', background: accent, boxShadow: `0 0 6px ${accent}88` }} />
+
+                  {/* Image count badge if >1 */}
+                  {productImgs.length > 1 && (
+                    <div style={{ position: 'absolute', bottom: 8, right: 8, background: 'rgba(10,9,8,0.75)', border: `1px solid rgba(255,255,255,0.08)`, borderRadius: 20, padding: '2px 7px', fontSize: 8, color: T.txtMid, backdropFilter: 'blur(4px)' }}>
+                      {productImgs.length} images
+                    </div>
+                  )}
                 </div>
 
                 {/* Card info */}
-                <div style={{ padding: '12px 14px', borderTop: `1px solid ${T.border}`, flexShrink: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 500, color: T.txtPri, marginBottom: 6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <div style={{ padding: '11px 14px', borderTop: `1px solid ${T.border}`, flexShrink: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: T.txtPri, marginBottom: 5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {project.name}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 9, color: accent, fontWeight: 500 }}>
-                      {MODEL_LABELS[project.model]}
-                    </span>
+                    <span style={{ fontSize: 9, color: accent, fontWeight: 500 }}>{MODEL_LABELS[project.model]}</span>
                     <span style={{ color: T.border }}>·</span>
-                    <span style={{ fontSize: 9, color: T.txtSec }}>
-                      {new Date(project.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
-                    </span>
+                    <span style={{ fontSize: 9, color: T.txtSec }}>{project.category}</span>
+                    <span style={{ color: T.border }}>·</span>
+                    <span style={{ fontSize: 9, color: T.txtSec }}>{new Date(project.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</span>
                   </div>
                 </div>
 
                 {/* Card actions — revealed on hover */}
                 <div className="card-actions" style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4, opacity: 0, transition: 'opacity 0.15s' }}>
-                  {/* Edit */}
                   <button
                     onClick={e => { e.stopPropagation(); onEditProject(project); }}
                     title="Edit project"
-                    style={{
-                      width: 24, height: 24, borderRadius: 2,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      border: `1px solid ${T.border}`,
-                      background: `${T.bg}CC`,
-                      color: T.txtSec,
-                      cursor: 'pointer', transition: 'all 0.12s',
-                    }}
+                    style={{ width: 24, height: 24, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${T.border}`, background: `${T.bg}CC`, color: T.txtSec, cursor: 'pointer', transition: 'all 0.12s' }}
                     onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = T.gold; (e.currentTarget as HTMLElement).style.borderColor = `${T.gold}55`; }}
                     onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = T.txtSec; (e.currentTarget as HTMLElement).style.borderColor = T.border; }}
                   >
@@ -275,19 +361,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       <path d="M9.5 2.5l2 2L4 12H2v-2L9.5 2.5zM8 4l2 2" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
                   </button>
-
-                  {/* Delete */}
                   <button
                     onClick={e => handleDelete(e, project.id)}
                     title={deleteConfirm === project.id ? 'Click again to confirm' : 'Delete'}
-                    style={{
-                      width: 24, height: 24, borderRadius: 2,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      border: `1px solid ${deleteConfirm === project.id ? '#C0392B44' : T.border}`,
-                      background: deleteConfirm === project.id ? 'rgba(192,57,43,0.12)' : `${T.bg}CC`,
-                      color: deleteConfirm === project.id ? '#E57373' : T.txtSec,
-                      cursor: 'pointer', transition: 'all 0.12s',
-                    }}
+                    style={{ width: 24, height: 24, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${deleteConfirm === project.id ? '#C0392B44' : T.border}`, background: deleteConfirm === project.id ? 'rgba(192,57,43,0.12)' : `${T.bg}CC`, color: deleteConfirm === project.id ? '#E57373' : T.txtSec, cursor: 'pointer', transition: 'all 0.12s' }}
                     onMouseEnter={e => { if (!deleteConfirm) { (e.currentTarget as HTMLElement).style.color = '#E57373'; (e.currentTarget as HTMLElement).style.borderColor = '#C0392B44'; } }}
                     onMouseLeave={e => { if (!deleteConfirm) { (e.currentTarget as HTMLElement).style.color = T.txtSec; (e.currentTarget as HTMLElement).style.borderColor = T.border; } }}
                   >
