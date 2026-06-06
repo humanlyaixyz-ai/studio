@@ -24,6 +24,11 @@ export function BulkConfirmOverlay({
 }: BulkConfirmOverlayProps) {
   const totalImages = skus.length * shotCount;
 
+  // Only the slots that actually have something uploaded
+  const uploadedShared = supportingSlotLabels.filter(
+    ({ key }) => !!uploadedFiles[key as keyof UploadedFiles]
+  );
+
   return (
     <div style={{
       position: 'absolute', inset: 0, background: WS.bg, zIndex: 35,
@@ -42,15 +47,12 @@ export function BulkConfirmOverlay({
             Review Batch Run
           </h2>
           <p style={{ fontSize: 11, color: WS.txtSec, margin: '4px 0 0' }}>
-            {shotCount} shots × {skus.length} SKUs = {totalImages} images
+            {shotCount} shot{shotCount !== 1 ? 's' : ''} × {skus.length} SKU{skus.length !== 1 ? 's' : ''} = {totalImages} images
           </p>
         </div>
         <button
           onClick={onCancel}
-          style={{
-            fontSize: 11, color: WS.txtSec, background: 'none', border: 'none',
-            cursor: 'pointer', fontFamily: 'inherit',
-          }}
+          style={{ fontSize: 11, color: WS.txtSec, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}
         >
           Cancel
         </button>
@@ -120,46 +122,63 @@ export function BulkConfirmOverlay({
         {/* Right — Shared inputs */}
         <div style={{ padding: '20px 24px', overflowY: 'auto' }}>
           <div style={{ fontSize: 9, color: WS.txtSec, letterSpacing: '0.08em', marginBottom: 12 }}>
-            SHARED FOR ALL SKUs
+            SHARED REFERENCES
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {supportingSlotLabels.map(({ key, label }) => {
-              const file = uploadedFiles[key as keyof UploadedFiles];
-              const missing = !file;
-              return (
-                <div key={key} style={{
-                  display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
-                  background: missing ? 'rgba(229,115,115,0.06)' : WS.surface,
-                  border: `1px solid ${missing ? '#E5737320' : WS.border}`, borderRadius: 6,
-                }}>
-                  <div style={{
-                    width: 36, height: 36, borderRadius: 4, background: WS.surfHi,
-                    overflow: 'hidden', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+
+          {uploadedShared.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {uploadedShared.map(({ key, label }) => {
+                const file = uploadedFiles[key as keyof UploadedFiles]!;
+                return (
+                  <div key={key} style={{
+                    display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
+                    background: WS.surface, border: `1px solid ${WS.border}`, borderRadius: 6,
                   }}>
-                    {file ? (
+                    <div style={{
+                      width: 36, height: 36, borderRadius: 4, background: WS.surfHi,
+                      overflow: 'hidden', flexShrink: 0,
+                    }}>
                       <img
                         src={`data:${file.mimeType};base64,${file.data}`}
                         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                         alt={label}
                       />
-                    ) : (
-                      <svg viewBox="0 0 12 12" fill="none" stroke={missing ? '#E57373' : WS.txtSec} strokeWidth="1.2" style={{ width: 14, height: 14 }}>
-                        <rect x="1" y="1" width="10" height="10" rx="1" />
-                        <path d="M4 6h4M6 4v4" strokeLinecap="round" />
-                      </svg>
-                    )}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 11, color: WS.txtPri }}>{label}</div>
+                      <div style={{ fontSize: 9, color: WS.txtSec, marginTop: 1 }}>Shared across all SKUs</div>
+                    </div>
+                    <svg viewBox="0 0 10 10" fill="none" stroke="#4CAF50" strokeWidth="1.5" style={{ width: 10, height: 10, flexShrink: 0 }}>
+                      <path d="M1.5 5.5l2.5 2.5 4.5-4.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
                   </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, color: missing ? '#E57373' : WS.txtPri }}>{label}</div>
-                    {missing && (
-                      <div style={{ fontSize: 9, color: '#E57373', marginTop: 2 }}>
-                        Missing — add in Inputs tab (advisory)
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{
+              padding: '20px 16px', borderRadius: 8,
+              border: `1px dashed ${WS.border}`, textAlign: 'center',
+            }}>
+              <svg viewBox="0 0 20 20" fill="none" stroke={WS.txtSec} strokeWidth="1.2" style={{ width: 28, height: 28, margin: '0 auto 10px' }}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909"/>
+              </svg>
+              <p style={{ fontSize: 11, color: WS.txtMid, margin: '0 0 4px' }}>
+                No shared references
+              </p>
+              <p style={{ fontSize: 10, color: WS.txtSec, margin: 0 }}>
+                Only product images (per SKU) will be used.<br/>
+                Add a model or background in Inputs to include them.
+              </p>
+            </div>
+          )}
+
+          {/* Info note */}
+          <div style={{ marginTop: 16, padding: '10px 12px', borderRadius: 6, background: `${WS.gold}08`, border: `1px solid ${WS.gold}20` }}>
+            <p style={{ fontSize: 9, color: WS.txtSec, margin: 0, lineHeight: 1.6 }}>
+              <span style={{ color: WS.gold, fontWeight: 500 }}>How it works — </span>
+              Each SKU's product image drives the generation. Shared references (model, background) are applied to all SKUs and are optional.
+            </p>
           </div>
         </div>
       </div>
@@ -171,10 +190,7 @@ export function BulkConfirmOverlay({
       }}>
         <button
           onClick={onCancel}
-          style={{
-            fontSize: 11, color: WS.txtSec, background: 'none', border: 'none',
-            cursor: 'pointer', fontFamily: 'inherit',
-          }}
+          style={{ fontSize: 11, color: WS.txtSec, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}
         >
           Cancel
         </button>
@@ -191,7 +207,7 @@ export function BulkConfirmOverlay({
           <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 11, height: 11 }}>
             <path d="M7 1l1.5 4.5L13 7l-4.5 1.5L7 13l-1.5-4.5L1 7l4.5-1.5L7 1z" strokeLinejoin="round" />
           </svg>
-          Generate All — {totalImages} images
+          Generate All — {totalImages} image{totalImages !== 1 ? 's' : ''}
         </button>
       </div>
     </div>
