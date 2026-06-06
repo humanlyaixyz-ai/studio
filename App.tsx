@@ -1242,24 +1242,77 @@ function App() {
           {/* History */}
           {projectHistory.length > 0 && (
             <div style={{ position: 'relative' }} className="history-wrap">
-              <button style={{ fontSize: 10, color: WS.txtSec, background: 'none', border: `1px solid transparent`, borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: 5, transition: 'all 0.12s' }} onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = WS.border; (e.currentTarget as HTMLElement).style.color = WS.txtMid; }} onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'transparent'; (e.currentTarget as HTMLElement).style.color = WS.txtSec; }}>
+              <button style={{ fontSize: 10, color: WS.txtSec, background: 'none', border: `1px solid transparent`, borderRadius: 4, cursor: 'pointer', fontFamily: 'inherit', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: 5, transition: 'all 0.12s' }} onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = WS.border; (e.currentTarget as HTMLElement).style.color = WS.txtPri; }} onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'transparent'; (e.currentTarget as HTMLElement).style.color = WS.txtSec; }}>
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" style={{ width: 11, height: 11 }}><circle cx="8" cy="8" r="6"/><path d="M8 5v3.5l2 1.5" strokeLinecap="round"/></svg>
                 History
+                <span style={{ background: WS.borderHi, borderRadius: 10, padding: '1px 5px', fontSize: 8, color: WS.txtSec }}>{projectHistory.length}</span>
               </button>
-              <div className="history-dropdown" style={{ display: 'none', position: 'absolute', right: 0, top: '100%', marginTop: 4, width: 220, background: WS.surface, border: `1px solid ${WS.border}`, borderRadius: 6, padding: 6, zIndex: 60, boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px 8px', borderBottom: `1px solid ${WS.border}`, marginBottom: 4 }}>
-                  <span style={{ fontSize: 9, color: WS.txtSec, letterSpacing: '0.08em' }}>RECENT</span>
-                  <button onClick={handleClearHistory} style={{ fontSize: 9, color: '#E57373', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>Clear all</button>
-                </div>
-                {projectHistory.map(batch => (
-                  <button key={batch.id} onClick={() => handleViewHistoryBatch(batch.id)} style={{ width: '100%', textAlign: 'left', padding: '8px 10px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', borderRadius: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center', transition: 'background 0.1s' }} onMouseEnter={e => (e.currentTarget.style.background = WS.surfHi)} onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
-                    <div>
-                      <div style={{ fontSize: 11, color: WS.txtPri, fontWeight: 500 }}>{batch.skuName || new Date(parseInt(batch.id)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                      <div style={{ fontSize: 9, color: WS.txtSec }}>{batch.skuName ? new Date(batch.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' · ' : ''}{batch.model.replace(/_/g, ' ')}</div>
-                    </div>
-                    <svg viewBox="0 0 12 12" fill="none" stroke={WS.txtSec} strokeWidth="1.4" style={{ width: 10, height: 10 }}><path d="M2 6h8M7 3l3 3-3 3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              <div className="history-dropdown" style={{ display: 'none', position: 'absolute', right: 0, top: '100%', marginTop: 6, width: 300, background: WS.surface, border: `1px solid ${WS.border}`, borderRadius: 8, overflow: 'hidden', zIndex: 60, boxShadow: '0 12px 48px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.03)' }}>
+                {/* Dropdown header */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', borderBottom: `1px solid ${WS.border}` }}>
+                  <span style={{ fontSize: 9, color: WS.txtSec, letterSpacing: '0.1em', fontWeight: 500 }}>GENERATION HISTORY</span>
+                  <button onClick={handleClearHistory} style={{ fontSize: 9, color: WS.txtSec, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4, transition: 'color 0.1s' }} onMouseEnter={e => (e.currentTarget.style.color = '#E57373')} onMouseLeave={e => (e.currentTarget.style.color = WS.txtSec)}>
+                    <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" style={{ width: 9, height: 9 }}><path d="M2 3h8M5 3V2h2v1M4 3l.5 7h3L8 3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    Clear all
                   </button>
-                ))}
+                </div>
+                {/* Batch entries */}
+                <div style={{ maxHeight: 340, overflowY: 'auto', scrollbarWidth: 'thin' as const, scrollbarColor: `${WS.border} transparent` }}>
+                  {projectHistory.map(batch => {
+                    const successImgs = batch.images.filter(i => i.status === 'success');
+                    const failImgs = batch.images.filter(i => i.status === 'failed');
+                    const isViewing = viewingHistoryBatchId === batch.id;
+                    const batchDate = new Date(batch.timestamp);
+                    const isToday = batchDate.toDateString() === new Date().toDateString();
+                    const timeStr = batchDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    const dateStr = isToday ? timeStr : batchDate.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + timeStr;
+                    return (
+                      <button key={batch.id} onClick={() => handleViewHistoryBatch(batch.id)} style={{ width: '100%', textAlign: 'left', padding: '10px 14px', background: isViewing ? WS.gold + '0A' : 'none', border: 'none', borderBottom: `1px solid ${WS.border}`, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', gap: 10, alignItems: 'flex-start', transition: 'background 0.1s', borderLeft: `2px solid ${isViewing ? WS.gold : 'transparent'}` }}
+                        onMouseEnter={e => { if (!isViewing) (e.currentTarget as HTMLElement).style.background = WS.surfHi; }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = isViewing ? WS.gold + '0A' : 'none'; }}
+                      >
+                        {/* Image strip */}
+                        <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+                          {successImgs.slice(0, 3).map((img, i) => (
+                            <div key={i} style={{ width: 28, height: 36, borderRadius: 3, overflow: 'hidden', background: WS.surfHi, border: `1px solid ${WS.border}` }}>
+                              {img.url && <img src={img.url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" />}
+                            </div>
+                          ))}
+                          {successImgs.length === 0 && (
+                            <div style={{ width: 28, height: 36, borderRadius: 3, background: WS.surfHi, border: `1px solid ${WS.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              <svg viewBox="0 0 12 12" fill="none" stroke={WS.border} strokeWidth="1.2" style={{ width: 12, height: 12 }}><rect x="1" y="1" width="10" height="10" rx="1"/><path d="M1 9l2.5-2.5 2 2 2.5-2.5L10 9" strokeLinecap="round"/></svg>
+                            </div>
+                          )}
+                        </div>
+                        {/* Meta */}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 11, color: isViewing ? WS.gold : WS.txtPri, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {batch.skuName || batch.model.replace(/_/g, ' ')}
+                          </div>
+                          <div style={{ fontSize: 9, color: WS.txtSec, marginTop: 2 }}>{dateStr}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                            {successImgs.length > 0 && (
+                              <span style={{ fontSize: 8, color: '#4CAF50', display: 'flex', alignItems: 'center', gap: 3 }}>
+                                <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#4CAF50', display: 'inline-block' }} />
+                                {successImgs.length} ok
+                              </span>
+                            )}
+                            {failImgs.length > 0 && (
+                              <span style={{ fontSize: 8, color: '#E57373', display: 'flex', alignItems: 'center', gap: 3 }}>
+                                <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#E57373', display: 'inline-block' }} />
+                                {failImgs.length} failed
+                              </span>
+                            )}
+                            {batch.category && (
+                              <span style={{ fontSize: 8, color: WS.txtSec, background: WS.surfHi, borderRadius: 3, padding: '1px 5px' }}>{batch.category}</span>
+                            )}
+                          </div>
+                        </div>
+                        <svg viewBox="0 0 10 10" fill="none" stroke={isViewing ? WS.gold : WS.border} strokeWidth="1.4" style={{ width: 9, height: 9, flexShrink: 0, marginTop: 4 }}><path d="M2 5h6M5.5 2.5L8 5l-2.5 2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
               <style>{`.history-wrap:hover .history-dropdown { display: block !important; }`}</style>
             </div>
@@ -1566,141 +1619,175 @@ function App() {
               const productKeys = PRODUCT_SLOT_KEYS[selectedCategory] || [];
               const primarySlot = productKeys[0] || 'productImage';
               const primaryLabel = ITEM_LABELS[primarySlot] || primarySlot;
+              const allSelected = skus.length > 0 && bulkSelectedSKUIds.size === skus.length;
 
               return (
-                <div>
-                  {/* SKU controls header — always visible */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <span style={{ fontSize: 10, color: WS.txtSec }}>
-                        {skus.length} SKU{skus.length !== 1 ? 's' : ''}
-                      </span>
-                      {skus.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 20, height: '100%' }}>
+
+                  {/* Left — SKU roster */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 0, minHeight: 0 }}>
+
+                    {/* Toolbar */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        {/* Select-all checkbox */}
                         <button
-                          onClick={() => setBulkSelectedSKUIds(
-                            bulkSelectedSKUIds.size === skus.length ? new Set() : new Set(skus.map(s => s.id))
-                          )}
-                          style={{ fontSize: 9, color: WS.txtSec, background: 'none', border: `1px solid ${WS.border}`, borderRadius: 3, cursor: 'pointer', padding: '3px 8px', fontFamily: 'inherit' }}
-                          onMouseEnter={e => (e.currentTarget.style.color = WS.txtPri)}
-                          onMouseLeave={e => (e.currentTarget.style.color = WS.txtSec)}
+                          onClick={() => setBulkSelectedSKUIds(allSelected ? new Set() : new Set(skus.map(s => s.id)))}
+                          style={{ width: 16, height: 16, borderRadius: 3, border: `1.5px solid ${allSelected ? WS.gold : WS.border}`, background: allSelected ? WS.gold : 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all 0.1s' }}
                         >
-                          {bulkSelectedSKUIds.size === skus.length && skus.length > 0 ? 'Deselect all' : 'Select all'}
+                          {allSelected && <svg viewBox="0 0 10 10" fill="none" stroke={WS.bg} strokeWidth="2" style={{ width: 8, height: 8 }}><path d="M2 5l2.5 2.5L8 3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                        </button>
+                        <span style={{ fontSize: 10, color: WS.txtSec, letterSpacing: '0.06em' }}>
+                          {skus.length} SKU{skus.length !== 1 ? 'S' : ''}
+                        </span>
+                        {bulkSelectedSKUIds.size > 0 && (
+                          <span style={{ fontSize: 9, color: WS.gold, background: WS.gold + '14', border: `1px solid ${WS.gold}30`, borderRadius: 20, padding: '1px 7px' }}>
+                            {bulkSelectedSKUIds.size} selected
+                          </span>
+                        )}
+                      </div>
+                      {bulkSelectedSKUIds.size >= 2 && (
+                        <button
+                          onClick={() => setShowBulkOverlay(true)}
+                          style={{ padding: '5px 14px', borderRadius: 20, background: WS.gold, color: WS.bg, border: 'none', fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 5 }}
+                        >
+                          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 9, height: 9 }}><path d="M6 1l1.2 3.6L11 6l-3.8 1.4L6 11l-1.2-3.6L1 6l3.8-1.4z" strokeLinejoin="round"/></svg>
+                          Run Batch ({bulkSelectedSKUIds.size})
                         </button>
                       )}
-                      {bulkSelectedSKUIds.size > 0 && (
-                        <span style={{ fontSize: 9, color: WS.gold }}>{bulkSelectedSKUIds.size} selected</span>
-                      )}
                     </div>
-                  </div>
 
-                  {/* SKU card grid */}
-                  {skus.length > 0 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 20 }}>
-                      {skus.map(sku => {
+                    {/* Table header */}
+                    {skus.length > 0 && (
+                      <div style={{ display: 'grid', gridTemplateColumns: '28px 52px 1fr 80px 60px 28px', gap: 0, alignItems: 'center', padding: '0 8px 6px', borderBottom: `1px solid ${WS.border}`, marginBottom: 2 }}>
+                        <div />
+                        <div />
+                        <div style={{ fontSize: 8, color: WS.txtSec, letterSpacing: '0.1em' }}>PRODUCT NAME</div>
+                        <div style={{ fontSize: 8, color: WS.txtSec, letterSpacing: '0.1em' }}>SKU CODE</div>
+                        <div style={{ fontSize: 8, color: WS.txtSec, letterSpacing: '0.1em', textAlign: 'center' }}>ACTIVE</div>
+                        <div />
+                      </div>
+                    )}
+
+                    {/* SKU rows */}
+                    <div style={{ overflowY: 'auto', flex: 1 }}>
+                      {skus.length === 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 0', gap: 10 }}>
+                          <div style={{ width: 40, height: 40, borderRadius: 8, border: `1px dashed ${WS.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <svg viewBox="0 0 16 16" fill="none" stroke={WS.txtSec} strokeWidth="1.2" style={{ width: 18, height: 18 }}><rect x="1" y="2" width="14" height="12" rx="1.5"/><path d="M1 11l3.5-3 3 2.5 3-3 4 3.5" strokeLinecap="round"/></svg>
+                          </div>
+                          <span style={{ fontSize: 10, color: WS.txtSec }}>No SKUs yet — add your first product variant</span>
+                        </div>
+                      ) : skus.map((sku, idx) => {
                         const isActive = activeSKUId === sku.id;
                         const isSelected = bulkSelectedSKUIds.has(sku.id);
                         const thumb = sku.productAssets[primarySlot];
                         return (
-                          <div key={sku.id} style={{ position: 'relative' }}>
+                          <div
+                            key={sku.id}
+                            style={{
+                              display: 'grid', gridTemplateColumns: '28px 52px 1fr 80px 60px 28px',
+                              gap: 0, alignItems: 'center', padding: '5px 8px',
+                              borderBottom: `1px solid ${WS.border}`,
+                              background: isActive ? WS.gold + '08' : isSelected ? WS.gold + '05' : 'transparent',
+                              transition: 'background 0.1s',
+                              borderLeft: `2px solid ${isActive ? WS.gold : 'transparent'}`,
+                            }}
+                            onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = WS.surfHi; }}
+                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = isActive ? WS.gold + '08' : isSelected ? WS.gold + '05' : 'transparent'; }}
+                          >
                             {/* Checkbox */}
                             <button
-                              onClick={() => setBulkSelectedSKUIds(prev => {
-                                const n = new Set(prev);
-                                isSelected ? n.delete(sku.id) : n.add(sku.id);
-                                return n;
-                              })}
-                              style={{
-                                position: 'absolute', top: 4, left: 4, zIndex: 2,
-                                width: 18, height: 18, borderRadius: 4,
-                                border: `1.5px solid ${isSelected ? WS.gold : WS.border}`,
-                                background: isSelected ? WS.gold : 'rgba(10,9,8,0.7)',
-                                cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                transition: 'all 0.1s',
-                              }}
-                              title={isSelected ? 'Deselect' : 'Select for bulk'}
+                              onClick={() => setBulkSelectedSKUIds(prev => { const n = new Set(prev); isSelected ? n.delete(sku.id) : n.add(sku.id); return n; })}
+                              style={{ width: 16, height: 16, borderRadius: 3, border: `1.5px solid ${isSelected ? WS.gold : WS.border}`, background: isSelected ? WS.gold : 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all 0.1s' }}
                             >
-                              {isSelected && (
-                                <svg viewBox="0 0 10 10" fill="none" stroke={WS.bg} strokeWidth="2" style={{ width: 8, height: 8 }}>
-                                  <path d="M2 5l2.5 2.5L8 3" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                              )}
+                              {isSelected && <svg viewBox="0 0 10 10" fill="none" stroke={WS.bg} strokeWidth="2" style={{ width: 8, height: 8 }}><path d="M2 5l2.5 2.5L8 3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                             </button>
 
-                            {/* Card body */}
-                            <button
-                              onClick={() => handleSelectSKU(sku.id)}
-                              style={{
-                                width: 110, background: 'none',
-                                border: `2px solid ${isActive ? WS.gold : isSelected ? WS.gold + '40' : WS.border}`,
-                                borderRadius: 8, cursor: 'pointer', padding: '6px 6px 8px',
-                                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5,
-                                transition: 'border-color 0.12s',
-                              }}
-                              title="Use this SKU's assets"
-                            >
-                              <div style={{
-                                width: 88, height: 88, borderRadius: 4, background: WS.surfHi,
-                                overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                              }}>
-                                {thumb ? (
-                                  <img src={`data:${thumb.mimeType};base64,${thumb.data}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt={sku.name} />
-                                ) : (
-                                  <svg viewBox="0 0 16 16" fill="none" stroke={WS.txtSec} strokeWidth="1.2" style={{ width: 22, height: 22 }}>
-                                    <rect x="1" y="2" width="14" height="12" rx="1.5" />
-                                    <path d="M1 11l3.5-3 3 2.5 3-3 4 3.5" strokeLinecap="round" />
-                                  </svg>
-                                )}
+                            {/* Thumbnail */}
+                            <button onClick={() => handleSelectSKU(sku.id)} style={{ padding: 0, background: 'none', border: 'none', cursor: 'pointer' }}>
+                              <div style={{ width: 38, height: 48, borderRadius: 3, background: WS.surfHi, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${WS.border}` }}>
+                                {thumb
+                                  ? <img src={`data:${thumb.mimeType};base64,${thumb.data}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt={sku.name} />
+                                  : <svg viewBox="0 0 12 12" fill="none" stroke={WS.border} strokeWidth="1.2" style={{ width: 14, height: 14 }}><rect x="1" y="1" width="10" height="10" rx="1"/><path d="M1 9l2.5-2.5 2 2 2.5-2.5L10 9" strokeLinecap="round"/></svg>
+                                }
                               </div>
-                              <div style={{ fontSize: 10, color: isActive ? WS.gold : WS.txtSec, textAlign: 'center', wordBreak: 'break-word', lineHeight: 1.3, maxWidth: 96, width: '100%' }}>
-                                {sku.name}
-                              </div>
-                              {sku.skuCode && (
-                                <div style={{ fontSize: 8, color: WS.txtSec }}>{sku.skuCode}</div>
-                              )}
                             </button>
 
-                            {/* Delete button */}
+                            {/* Name */}
+                            <button onClick={() => handleSelectSKU(sku.id)} style={{ padding: '0 10px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
+                              <div style={{ fontSize: 11, color: isActive ? WS.gold : WS.txtPri, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sku.name}</div>
+                              <div style={{ fontSize: 8, color: WS.txtSec, marginTop: 2 }}>#{idx + 1}</div>
+                            </button>
+
+                            {/* Code */}
+                            <div style={{ fontSize: 10, color: WS.txtSec, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '0 4px' }}>
+                              {sku.skuCode || <span style={{ color: WS.border }}>—</span>}
+                            </div>
+
+                            {/* Active dot */}
+                            <div style={{ display: 'flex', justifyContent: 'center' }}>
+                              <div style={{ width: 6, height: 6, borderRadius: '50%', background: isActive ? WS.gold : WS.border, transition: 'background 0.15s' }} />
+                            </div>
+
+                            {/* Delete */}
                             <button
                               onClick={() => handleDeleteSKU(sku.id)}
-                              style={{
-                                position: 'absolute', top: -4, right: -4, width: 17, height: 17,
-                                borderRadius: '50%', background: WS.borderHi, border: 'none',
-                                cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                color: WS.txtSec, fontSize: 10,
-                              }}
-                              title="Delete SKU"
+                              style={{ width: 20, height: 20, borderRadius: 3, background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: WS.border, transition: 'color 0.1s' }}
+                              onMouseEnter={e => (e.currentTarget.style.color = '#E57373')}
+                              onMouseLeave={e => (e.currentTarget.style.color = WS.border)}
+                              title="Remove SKU"
                             >
-                              ×
+                              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 10, height: 10 }}><path d="M2 2l8 8M10 2l-8 8" strokeLinecap="round"/></svg>
                             </button>
                           </div>
                         );
                       })}
                     </div>
-                  )}
-
-                  {/* Bulk add */}
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={{ fontSize: 10, color: WS.txtSec, marginBottom: 8 }}>Bulk add — one SKU per image ({primaryLabel})</div>
-                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 14px', border: `1px dashed ${WS.border}`, borderRadius: 6, cursor: 'pointer', fontSize: 10, color: WS.txtMid, transition: 'border-color 0.12s' }} onMouseEnter={e => (e.currentTarget.style.borderColor = WS.borderHi)} onMouseLeave={e => (e.currentTarget.style.borderColor = WS.border)}>
-                      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" style={{ width: 12, height: 12 }}><path d="M7 1v8M4.5 3.5L7 1l2.5 2.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M2 10v2a1 1 0 001 1h8a1 1 0 001-1v-2" strokeLinecap="round"/></svg>
-                      Upload multiple images
-                      <input type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={async e => {
-                        const files = Array.from(e.target.files || []);
-                        const parsed = await Promise.all(files.map((f: File) => new Promise<{ name: string; data: string; mimeType: string }>(res => {
-                          const reader = new FileReader();
-                          reader.onloadend = () => res({ name: f.name, data: (reader.result as string).split(',')[1], mimeType: f.type });
-                          reader.readAsDataURL(f as Blob);
-                        })));
-                        await handleBulkAddSKUs(parsed, primarySlot);
-                        e.target.value = '';
-                      }} />
-                    </label>
                   </div>
 
-                  {/* Manual add form */}
-                  <div style={{ background: WS.surfHi, borderRadius: 8, padding: 14, maxWidth: 400 }}>
-                    <div style={{ fontSize: 10, color: WS.txtSec, marginBottom: 12, letterSpacing: '0.06em' }}>ADD SINGLE SKU</div>
-                    <SKUAddForm productKeys={productKeys} itemLabels={ITEM_LABELS} ws={WS} onAdd={(name, code, assets) => handleAddSKU(name, code, assets)} />
+                  {/* Right — Add SKUs */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12, borderLeft: `1px solid ${WS.border}`, paddingLeft: 20 }}>
+
+                    {/* Bulk import */}
+                    <div>
+                      <div style={{ fontSize: 8, color: WS.txtSec, letterSpacing: '0.1em', marginBottom: 8 }}>BULK IMPORT</div>
+                      <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '18px 12px', border: `1px dashed ${WS.borderHi}`, borderRadius: 8, cursor: 'pointer', transition: 'border-color 0.15s, background 0.15s', background: 'transparent' }}
+                        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = WS.gold + '60'; (e.currentTarget as HTMLElement).style.background = WS.gold + '06'; }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = WS.borderHi; (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                      >
+                        <div style={{ width: 32, height: 32, borderRadius: 6, background: WS.surfHi, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${WS.border}` }}>
+                          <svg viewBox="0 0 14 14" fill="none" stroke={WS.gold} strokeWidth="1.4" style={{ width: 13, height: 13 }}><path d="M7 1v8M4.5 3.5L7 1l2.5 2.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M2 10v2a1 1 0 001 1h8a1 1 0 001-1v-2" strokeLinecap="round"/></svg>
+                        </div>
+                        <div style={{ textAlign: 'center' }}>
+                          <div style={{ fontSize: 10, color: WS.txtPri, fontWeight: 500 }}>Drop images here</div>
+                          <div style={{ fontSize: 9, color: WS.txtSec, marginTop: 2 }}>1 image = 1 SKU · {primaryLabel} slot</div>
+                        </div>
+                        <input type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={async e => {
+                          const files = Array.from(e.target.files || []);
+                          const parsed = await Promise.all(files.map((f: File) => new Promise<{ name: string; data: string; mimeType: string }>(res => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => res({ name: f.name, data: (reader.result as string).split(',')[1], mimeType: f.type });
+                            reader.readAsDataURL(f as Blob);
+                          })));
+                          await handleBulkAddSKUs(parsed, primarySlot);
+                          e.target.value = '';
+                        }} />
+                      </label>
+                    </div>
+
+                    {/* Divider */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ flex: 1, height: 1, background: WS.border }} />
+                      <span style={{ fontSize: 8, color: WS.txtSec, letterSpacing: '0.08em' }}>OR ADD ONE</span>
+                      <div style={{ flex: 1, height: 1, background: WS.border }} />
+                    </div>
+
+                    {/* Single SKU add */}
+                    <div>
+                      <div style={{ fontSize: 8, color: WS.txtSec, letterSpacing: '0.1em', marginBottom: 8 }}>SINGLE SKU</div>
+                      <SKUAddForm productKeys={productKeys} itemLabels={ITEM_LABELS} ws={WS} onAdd={(name, code, assets) => handleAddSKU(name, code, assets)} />
+                    </div>
                   </div>
                 </div>
               );
