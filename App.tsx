@@ -1474,7 +1474,7 @@ function App() {
                       </div>
                       {bulkSelectedSKUIds.size >= 2 && (
                         <button
-                          onClick={() => setShowBulkOverlay(true)}
+                          onClick={() => { setShowBulkOverlay(true); setWorkspaceTab(null); }}
                           style={{ padding: '5px 14px', borderRadius: 20, background: WS.gold, color: WS.bg, border: 'none', fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 5 }}
                         >
                           <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 9, height: 9 }}><path d="M6 1l1.2 3.6L11 6l-3.8 1.4L6 11l-1.2-3.6L1 6l3.8-1.4z" strokeLinejoin="round"/></svg>
@@ -1687,7 +1687,7 @@ function App() {
             {/* Generate / Run Batch button */}
             {bulkSelectedSKUIds.size >= 2 ? (
               <button
-                onClick={() => setShowBulkOverlay(true)}
+                onClick={() => { setShowBulkOverlay(true); setWorkspaceTab(null); }}
                 disabled={isBulkGenerating}
                 style={{ padding: '9px 22px', borderRadius: 40, background: WS.gold, color: WS.bg, border: 'none', fontSize: 11, fontWeight: 600, cursor: isBulkGenerating ? 'not-allowed' : 'pointer', fontFamily: 'inherit', transition: 'all 0.15s', display: 'flex', alignItems: 'center', gap: 7, opacity: isBulkGenerating ? 0.5 : 1 }}
                 onMouseEnter={e => { if (!isBulkGenerating) (e.currentTarget as HTMLElement).style.opacity = '0.88'; }}
