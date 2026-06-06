@@ -397,6 +397,19 @@ function App() {
     setError(null);
     setUploadedFiles({});
 
+    // If the project already has in-memory assets (e.g. newly created), use them immediately
+    // so the workspace isn't blank while Supabase uploads are still in flight.
+    const inMemoryAssets = project.assets && Object.keys(project.assets).length > 0
+      ? project.assets : null;
+    if (inMemoryAssets) {
+      setActiveProject(prev => prev ? { ...prev, assets: inMemoryAssets } : prev);
+      const preloaded: UploadedFiles = {};
+      Object.entries(inMemoryAssets).forEach(([key, files]) => {
+        if (files.length > 0) preloaded[key as keyof UploadedFiles] = { data: files[0].data, mimeType: files[0].mimeType };
+      });
+      setUploadedFiles(preloaded);
+    }
+
     // Load assets + history + SKUs from Supabase in parallel
     setIsLoadingProject(true);
     try {
@@ -407,17 +420,17 @@ function App() {
       ]);
       setSkus(loadedSkus);
 
-      setActiveProject(prev => prev ? { ...prev, assets } : prev);
+      // Use Supabase assets if available; fall back to in-memory (race on new projects)
+      const finalAssets = Object.keys(assets).length > 0 ? assets : (inMemoryAssets ?? {});
+      setActiveProject(prev => prev ? { ...prev, assets: finalAssets } : prev);
       setGenerationHistory(history);
 
-      // Pre-populate uploadedFiles from supporting assets (non-product slots)
-      if (Object.keys(assets).length > 0) {
-        const productKeys = new Set<string>(PRODUCT_SLOT_KEYS[project.category] || []);
+      // Pre-populate uploadedFiles from ALL project-level assets (product + supporting).
+      // The SKU effect will override product keys when a SKU is selected.
+      if (Object.keys(finalAssets).length > 0) {
         const preloaded: UploadedFiles = {};
-        Object.entries(assets).forEach(([key, files]) => {
-          if (!productKeys.has(key) && files.length > 0) {
-            preloaded[key as keyof UploadedFiles] = { data: files[0].data, mimeType: files[0].mimeType };
-          }
+        Object.entries(finalAssets).forEach(([key, files]) => {
+          if (files.length > 0) preloaded[key as keyof UploadedFiles] = { data: files[0].data, mimeType: files[0].mimeType };
         });
         setUploadedFiles(preloaded);
       }
