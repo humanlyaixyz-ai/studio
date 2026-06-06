@@ -46,18 +46,18 @@ const BatchStack: React.FC<{
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, width: 120 }}
+      style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, width: 148 }}
     >
       {/* Stack visual */}
-      <div style={{ position: 'relative', width: 100, height: 134 }}>
+      <div style={{ position: 'relative', width: 124, height: 165 }}>
         {/* Back card */}
         <div style={{
           position: 'absolute', inset: 0,
-          borderRadius: 6, overflow: 'hidden',
+          borderRadius: 7, overflow: 'hidden',
           background: WS.surfHi, border: `1px solid ${WS.border}`,
-          transform: hovered ? 'rotate(-6deg) translate(-6px, 2px)' : 'rotate(-3deg) translate(-4px, 2px)',
-          transition: 'transform 0.2s ease',
-          opacity: 0.45,
+          transform: hovered ? 'rotate(-14deg) translate(-18px, 6px)' : 'rotate(-4deg) translate(-5px, 3px)',
+          transition: 'transform 0.25s cubic-bezier(0.34,1.56,0.64,1)',
+          opacity: 0.5,
         }}>
           {back?.url && <img src={back.url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" />}
         </div>
@@ -65,11 +65,11 @@ const BatchStack: React.FC<{
         {/* Mid card */}
         <div style={{
           position: 'absolute', inset: 0,
-          borderRadius: 6, overflow: 'hidden',
+          borderRadius: 7, overflow: 'hidden',
           background: WS.surfHi, border: `1px solid ${WS.border}`,
-          transform: hovered ? 'rotate(3deg) translate(4px, -1px)' : 'rotate(1.5deg) translate(2px, 0px)',
-          transition: 'transform 0.2s ease',
-          opacity: 0.65,
+          transform: hovered ? 'rotate(10deg) translate(14px, -3px)' : 'rotate(2deg) translate(3px, 1px)',
+          transition: 'transform 0.25s cubic-bezier(0.34,1.56,0.64,1)',
+          opacity: 0.7,
         }}>
           {mid?.url && <img src={mid.url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" />}
         </div>
@@ -77,12 +77,12 @@ const BatchStack: React.FC<{
         {/* Front card */}
         <div style={{
           position: 'absolute', inset: 0,
-          borderRadius: 6, overflow: 'hidden',
+          borderRadius: 7, overflow: 'hidden',
           background: WS.surfHi,
           border: `1px solid ${hovered ? WS.borderHi : WS.border}`,
-          transform: hovered ? 'scale(1.03)' : 'scale(1)',
-          transition: 'transform 0.2s ease, border-color 0.15s',
-          boxShadow: hovered ? '0 8px 24px rgba(0,0,0,0.5)' : '0 4px 12px rgba(0,0,0,0.3)',
+          transform: hovered ? 'scale(1.06) translateY(-4px)' : 'scale(1)',
+          transition: 'transform 0.25s cubic-bezier(0.34,1.56,0.64,1), border-color 0.15s',
+          boxShadow: hovered ? '0 16px 40px rgba(0,0,0,0.6)' : '0 4px 12px rgba(0,0,0,0.3)',
         }}>
           {front?.url ? (
             <img src={front.url} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} alt={title} />
