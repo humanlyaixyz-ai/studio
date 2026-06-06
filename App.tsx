@@ -3,12 +3,12 @@ import ImageUploadCard from './components/ImageUploadCard';
 import ModelSelection from './components/ModelSelection';
 import CategorySelection from './components/CategorySelection';
 import PoseEditor from './components/PoseEditor';
-import ColorGradingControl from './components/ColorGradingControl';
 import CameraSettings from './components/CameraSettings';
 import { Dashboard } from './pages/Dashboard';
 import { CreateProject } from './pages/CreateProject';
 import { BulkConfirmOverlay } from './components/BulkConfirmOverlay';
 import { BulkResultsCanvas } from './components/BulkResultsCanvas';
+import { ImageEditPanel } from './components/ImageEditPanel';
 import { ModelType, UploadedFiles, GeneratedImage, ProductCategory, GenerationBatch, ActiveGenerationMeta, Project, StylingConfig, CameraConfig, ShotConfig, ApiProvider, AssetFile, SKU } from './types';
 import { geminiService, refineImageDetails, setGeminiApiKey } from './services/geminiService';
 import { kieService, setKieApiKey } from './services/kieService';
@@ -176,15 +176,8 @@ function App() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Edit State
-  const [editingPrompt, setEditingPrompt] = useState<string>('');
+  // Edit panel state
   const [selectedImageForEditIndex, setSelectedImageForEditIndex] = useState<number | null>(null);
-  const [editCustomReferences, setEditCustomReferences] = useState<{ id: string; data: string; mimeType: string }[]>([]);
-  const [editSelectedOriginalKeys, setEditSelectedOriginalKeys] = useState<string[]>([]);
-
-  // Color Grading State
-  const [gradingImageIndex, setGradingImageIndex] = useState<number | null>(null);
-  const [gradingBase64, setGradingBase64] = useState<string | null>(null);
 
   const [isZipping, setIsZipping] = useState(false);
 
@@ -995,34 +988,34 @@ function App() {
     }
   }, [displayedImages, apiKey, selectedModel, uploadedFiles, brandName, handleUpdateDisplayedImage, selectedCategory, activeProject, stylingConfig, cameraConfig, currentShots]);
 
-  const handleApplyEdit = useCallback(async () => {
-    if (selectedImageForEditIndex === null || editingPrompt.trim() === '') return;
-    const imageToEdit = displayedImages[selectedImageForEditIndex];
-    if (!imageToEdit || !imageToEdit.url) return;
+  const handlePanelApplyEdit = useCallback(async (
+    index: number,
+    prompt: string,
+    references: { id: string; data: string; mimeType: string }[],
+    originalKeys: string[]
+  ) => {
+    const imageToEdit = displayedImages[index];
+    if (!imageToEdit || !imageToEdit.url || !prompt.trim()) return;
 
-    setIsLoading(true);
-    handleUpdateDisplayedImage(selectedImageForEditIndex, { status: 'generating' });
+    handleUpdateDisplayedImage(index, { status: 'generating' });
     const startTime = Date.now();
 
     try {
       let imageInput = '';
-
       if (apiProvider === 'kie' && imageToEdit.url.startsWith('http')) {
         imageInput = imageToEdit.url;
       } else {
-        if (imageToEdit.url.startsWith('http')) {
-          imageInput = await urlToBase64(imageToEdit.url);
-        } else {
-          imageInput = imageToEdit.url.split(',')[1];
-        }
+        imageInput = imageToEdit.url.startsWith('http')
+          ? await urlToBase64(imageToEdit.url)
+          : imageToEdit.url.split(',')[1];
       }
 
       const referenceImages = [
-        ...editCustomReferences.map(r => ({ data: r.data, mimeType: r.mimeType })),
-        ...editSelectedOriginalKeys.map(key => {
+        ...references.map(r => ({ data: r.data, mimeType: r.mimeType })),
+        ...originalKeys.map(key => {
           const item = uploadedFiles[key as keyof UploadedFiles];
           return item ? { data: item.data, mimeType: item.mimeType } : null;
-        }).filter(item => item !== null) as { data: string; mimeType: string }[]
+        }).filter(Boolean) as { data: string; mimeType: string }[]
       ];
 
       let currentAspectRatio: any = '3:4';
@@ -1037,59 +1030,20 @@ function App() {
 
       let editedBase64 = '';
       if (apiProvider === 'kie') {
-        editedBase64 = await kieService.editImage(imageInput, editingPrompt, referenceImages, currentAspectRatio);
+        editedBase64 = await kieService.editImage(imageInput, prompt, referenceImages, currentAspectRatio);
       } else {
-        // Ensure Base64 for Gemini
         const base64ForGemini = imageInput.startsWith('http') ? await urlToBase64(imageInput) : imageInput;
-        editedBase64 = await geminiService.editImage(base64ForGemini, editingPrompt, referenceImages, currentAspectRatio);
+        editedBase64 = await geminiService.editImage(base64ForGemini, prompt, referenceImages, currentAspectRatio);
       }
-      const duration = Date.now() - startTime;
-      handleUpdateDisplayedImage(selectedImageForEditIndex, { status: 'success', url: editedBase64, prompt: editingPrompt, generationTime: duration });
-
-      setEditingPrompt('');
-      // Keep selected for consecutive edits
-      // setSelectedImageForEditIndex(null); 
-      setEditCustomReferences([]);
-      setEditSelectedOriginalKeys([]);
+      handleUpdateDisplayedImage(index, { status: 'success', url: editedBase64, prompt, generationTime: Date.now() - startTime });
     } catch (e: any) {
-      handleUpdateDisplayedImage(selectedImageForEditIndex, { status: 'failed', errorMessage: e.message });
-    } finally {
-      setIsLoading(false);
+      handleUpdateDisplayedImage(index, { status: 'failed', errorMessage: e.message });
     }
-  }, [displayedImages, selectedImageForEditIndex, editingPrompt, handleUpdateDisplayedImage, editCustomReferences, editSelectedOriginalKeys, uploadedFiles, viewingHistoryBatchId, generationHistory, activeGenerationMeta, selectedModel]);
+  }, [displayedImages, handleUpdateDisplayedImage, uploadedFiles, viewingHistoryBatchId, generationHistory, activeGenerationMeta, selectedModel, apiProvider]);
 
-  const handleOpenColorGrading = useCallback(async (index: number) => {
-    const img = displayedImages[index];
-    if (!img || !img.url) return;
-
-    try {
-      let base64 = '';
-      if (img.url.startsWith('http')) {
-        setIsLoading(true);
-        base64 = await urlToBase64(img.url);
-        setIsLoading(false);
-      } else {
-        base64 = img.url.split(',')[1];
-      }
-      setGradingBase64(base64);
-      setGradingImageIndex(index);
-    } catch (e) {
-      console.error("Failed to prepare image for grading", e);
-      setIsLoading(false);
-    }
-  }, [displayedImages]);
-
-  const handleApplyColorGrading = useCallback((newImageBase64: string) => {
-    if (gradingImageIndex === null) return;
-    handleUpdateDisplayedImage(gradingImageIndex, { url: `data:image/jpeg;base64,${newImageBase64}` });
-    setGradingImageIndex(null);
-    setGradingBase64(null);
-  }, [gradingImageIndex, handleUpdateDisplayedImage]);
-
-  const handleColorGradingPreview = useCallback(async (adjustments: ColorAdjustments) => {
-    if (!gradingBase64) return '';
-    return await applyColorGrading(gradingBase64, adjustments);
-  }, [gradingBase64]);
+  const handlePanelApplyColorGrading = useCallback((index: number, newBase64: string) => {
+    handleUpdateDisplayedImage(index, { url: `data:image/jpeg;base64,${newBase64}` });
+  }, [handleUpdateDisplayedImage]);
 
   const handleDownloadImage = useCallback((imageUrl: string | undefined, filename: string) => {
     if (!imageUrl) return;
@@ -1146,10 +1100,7 @@ function App() {
 
   const handleViewHistoryBatch = useCallback((batchId: string) => {
     setViewingHistoryBatchId(batchId);
-    setEditingPrompt('');
     setSelectedImageForEditIndex(null);
-    setEditCustomReferences([]);
-    setEditSelectedOriginalKeys([]);
     if (outputPreviewRef.current) outputPreviewRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
 
@@ -1172,25 +1123,6 @@ function App() {
     if (viewingHistoryBatchId !== null) handleViewCurrentGeneration();
   }, [viewingHistoryBatchId, handleViewCurrentGeneration, projectHistory]);
 
-  const handleEditAddReference = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file && file.type.startsWith('image/')) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === 'string') {
-          const base64String = reader.result.split(',')[1];
-          setEditCustomReferences(prev => [
-            ...prev,
-            { id: Date.now().toString(), data: base64String, mimeType: file.type }
-          ]);
-        }
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleEditRemoveReference = (id: string) => setEditCustomReferences(prev => prev.filter(ref => ref.id !== id));
-  const toggleEditOriginalItem = (key: string) => setEditSelectedOriginalKeys(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
 
   const imagesToGenerateCount = currentShots.length;
   const completedImagesCount = liveGenerationImages.filter(img => img.status === 'success').length;
@@ -1271,8 +1203,7 @@ function App() {
         @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;1,400&family=Sora:wght@300;400;500&display=swap');
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes spin-slow { to { transform: rotate(360deg); } }
-        .ws-img-card:hover .ws-img-overlay { opacity: 1 !important; }
-        *:hover > .bulk-dl-btn, .bulk-dl-btn:hover { opacity: 1 !important; }
+*:hover > .bulk-dl-btn, .bulk-dl-btn:hover { opacity: 1 !important; }
       `}</style>
 
       {/* ── Top slim bar ── */}
@@ -1441,18 +1372,10 @@ function App() {
                     </div>
                   )}
 
-                  {/* Hover overlay */}
-                  {image.status === 'success' && image.url && (
-                    <div className="ws-img-overlay" style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', opacity: 0, transition: 'opacity 0.15s', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                      <button onClick={e => { e.stopPropagation(); handleDownloadImage(image.url, `Shot_${String(index+1).padStart(2,'0')}.jpg`); }} style={{ width: 36, height: 36, borderRadius: '50%', background: 'white', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Download">
-                        <svg viewBox="0 0 14 14" fill="none" stroke="#0A0908" strokeWidth="1.5" style={{ width: 12, height: 12 }}><path d="M2 10v2a1 1 0 001 1h8a1 1 0 001-1v-2" strokeLinecap="round"/><path d="M7 1v8M4.5 6.5L7 9l2.5-2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                      </button>
-                      <button onClick={e => { e.stopPropagation(); handleRefineImage(index); }} style={{ width: 36, height: 36, borderRadius: '50%', background: WS.surface, border: `1px solid ${WS.border}`, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Refine">
-                        <svg viewBox="0 0 14 14" fill="none" stroke={WS.gold} strokeWidth="1.4" style={{ width: 12, height: 12 }}><path d="M9.5 2.5l2 2L4 12H2v-2L9.5 2.5zM8 4l2 2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                      </button>
-                      <button onClick={e => { e.stopPropagation(); handleOpenColorGrading(index); }} style={{ width: 36, height: 36, borderRadius: '50%', background: WS.surface, border: `1px solid ${WS.border}`, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Color Grade">
-                        <svg viewBox="0 0 14 14" fill="none" stroke={WS.txtMid} strokeWidth="1.4" style={{ width: 12, height: 12 }}><path d="M3 8V3m0 5a2 2 0 010 4m0-4a2 2 0 000 4M7 6V3m0 3a2 2 0 010 4m0-4a2 2 0 000 4M11 10V3m0 7a2 2 0 010 0" strokeLinecap="round"/></svg>
-                      </button>
+                  {/* Editing/regenerating overlay */}
+                  {image.url && (image.status === 'generating' || image.status === 'refining') && (
+                    <div style={{ position: 'absolute', inset: 0, background: 'rgba(10,9,8,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <div style={{ width: 22, height: 22, border: `2px solid ${WS.gold}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
                     </div>
                   )}
 
@@ -1872,56 +1795,18 @@ function App() {
         </div>
       )}
 
-      {/* ── Edit bar (when images exist) ── */}
-      {displayedImages.some(img => img.status === 'success') && (
-        <div style={{ position: 'absolute', bottom: 80, left: 24, right: 24, zIndex: 30, pointerEvents: workspaceTab ? 'none' : 'auto', opacity: workspaceTab ? 0 : 1, transition: 'opacity 0.15s' }}>
-          <div style={{ maxWidth: 760, margin: '0 auto', background: WS.surface, border: `1px solid ${WS.border}`, borderRadius: 10, padding: 14, boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
-            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 10 }}>
-                  {ITEMS_TO_UPLOAD.map(item => {
-                    const key = item.key as keyof UploadedFiles;
-                    if (!uploadedFiles[key]) return null;
-                    const isSelected = editSelectedOriginalKeys.includes(key);
-                    return (
-                      <button key={key} onClick={() => toggleEditOriginalItem(key)} style={{ padding: '3px 9px', borderRadius: 20, fontSize: 9, fontWeight: 500, border: `1px solid ${isSelected ? WS.gold + '80' : WS.border}`, background: isSelected ? WS.gold + '12' : 'transparent', color: isSelected ? WS.gold : WS.txtSec, cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.1s' }}>
-                        {isSelected ? '✓ ' : ''}{item.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: WS.bg, borderRadius: 6, padding: '6px 10px', border: `1px solid ${WS.border}` }}>
-                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                    {editCustomReferences.map(ref => (
-                      <div key={ref.id} style={{ position: 'relative', width: 28, height: 28 }}>
-                        <img src={`data:${ref.mimeType};base64,${ref.data}`} style={{ width: 28, height: 28, objectFit: 'cover', borderRadius: '50%', display: 'block' }} />
-                        <button onClick={() => handleEditRemoveReference(ref.id)} style={{ position: 'absolute', top: -3, right: -3, width: 13, height: 13, borderRadius: '50%', background: WS.borderHi, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: WS.txtPri, fontSize: 8 }}>×</button>
-                      </div>
-                    ))}
-                    <label style={{ width: 28, height: 28, borderRadius: '50%', background: WS.surfHi, border: `1px solid ${WS.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: WS.txtSec }}>
-                      <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 9, height: 9 }}><path d="M6 1v10M1 6h10" strokeLinecap="round"/></svg>
-                      <input type="file" accept="image/*" onChange={handleEditAddReference} style={{ display: 'none' }} />
-                    </label>
-                  </div>
-                  <div style={{ width: 1, height: 18, background: WS.border }} />
-                  <input type="text" value={editingPrompt} onChange={e => setEditingPrompt(e.target.value)} placeholder={selectedImageForEditIndex !== null ? "Describe your edit…" : "Select an image above to edit"} style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 11, color: WS.txtPri, fontFamily: 'inherit' }} disabled={selectedImageForEditIndex === null || isLoading} />
-                </div>
-              </div>
-              <button onClick={handleApplyEdit} disabled={selectedImageForEditIndex === null || isLoading} style={{ padding: '10px 18px', borderRadius: 6, background: selectedImageForEditIndex !== null && !isLoading ? WS.gold : WS.borderHi, color: selectedImageForEditIndex !== null && !isLoading ? WS.bg : WS.txtSec, border: 'none', fontSize: 11, fontWeight: 600, cursor: selectedImageForEditIndex !== null ? 'pointer' : 'not-allowed', fontFamily: 'inherit', alignSelf: 'flex-end', transition: 'all 0.12s' }}>
-                Apply
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Color grading modal */}
-      {gradingImageIndex !== null && gradingBase64 && (
-        <ColorGradingControl
-          originalImage={gradingBase64}
-          onApply={handleApplyColorGrading}
-          onPreview={handleColorGradingPreview}
-          onCancel={() => { setGradingImageIndex(null); setGradingBase64(null); }}
+      {/* Image edit panel */}
+      {selectedImageForEditIndex !== null && displayedImages[selectedImageForEditIndex] && (
+        <ImageEditPanel
+          image={displayedImages[selectedImageForEditIndex]}
+          imageIndex={selectedImageForEditIndex}
+          uploadedFiles={uploadedFiles}
+          filename={`Shot_${String(selectedImageForEditIndex + 1).padStart(2, '0')}.jpg`}
+          onClose={() => setSelectedImageForEditIndex(null)}
+          onRegenerate={handleRetryImage}
+          onApplyEdit={handlePanelApplyEdit}
+          onApplyColorGrading={handlePanelApplyColorGrading}
+          onDownload={handleDownloadImage}
         />
       )}
     </div>
