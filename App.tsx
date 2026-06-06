@@ -7,6 +7,8 @@ import ColorGradingControl from './components/ColorGradingControl';
 import CameraSettings from './components/CameraSettings';
 import { Dashboard } from './pages/Dashboard';
 import { CreateProject } from './pages/CreateProject';
+import { BulkConfirmOverlay } from './components/BulkConfirmOverlay';
+import { BulkResultsCanvas } from './components/BulkResultsCanvas';
 import { ModelType, UploadedFiles, GeneratedImage, ProductCategory, GenerationBatch, ActiveGenerationMeta, Project, StylingConfig, CameraConfig, ShotConfig, ApiProvider, AssetFile, SKU } from './types';
 import { geminiService, refineImageDetails, setGeminiApiKey } from './services/geminiService';
 import { kieService, setKieApiKey } from './services/kieService';
@@ -127,8 +129,10 @@ function App() {
   const [bulkSelectedSKUIds, setBulkSelectedSKUIds] = useState<Set<string>>(new Set());
   const [isBulkGenerating, setIsBulkGenerating] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number; skuName: string } | null>(null);
-  const [bulkRunBatchIds, setBulkRunBatchIds] = useState<string[]>([]);
-  const [viewingBulkRun, setViewingBulkRun] = useState(false);
+  const [bulkRunId, setBulkRunId] = useState<string | null>(null);
+  const [bulkRunSKUs, setBulkRunSKUs] = useState<SKU[]>([]);
+  const [bulkCurrentSKUId, setBulkCurrentSKUId] = useState<string | null>(null);
+  const [showBulkOverlay, setShowBulkOverlay] = useState(false);
 
   // --- Configuration State (Used for both Creation Form & Active Workspace) ---
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFiles>({});
@@ -480,42 +484,43 @@ function App() {
   }, [activeSKUId]);
 
   const handleBulkGenerate = useCallback(async () => {
-    if (!activeProject || bulkSelectedSKUIds.size === 0) return;
+    if (!activeProject || bulkSelectedSKUIds.size < 2) return;
     if (apiProvider === 'google' && !apiKey) { setError('Gemini API Key required.'); return; }
     if (apiProvider === 'kie' && !kieApiKey) { setError('Kie.ai API Key required.'); return; }
 
     const selectedSKUs = skus.filter(s => bulkSelectedSKUIds.has(s.id));
+    const runId = `bulk-${Date.now()}`;
     const productKeys = new Set<string>(PRODUCT_SLOT_KEYS[selectedCategory] || []);
 
-    // Supporting assets from current uploadedFiles (non-product slots, shared across all SKUs)
     const supportingAssets: UploadedFiles = {};
     Object.entries(uploadedFiles).forEach(([k, v]) => {
       if (!productKeys.has(k)) supportingAssets[k as keyof UploadedFiles] = v as UploadedFiles[keyof UploadedFiles];
     });
 
+    setShowBulkOverlay(false);
+    setBulkRunId(runId);
+    setBulkRunSKUs(selectedSKUs);
     setIsBulkGenerating(true);
     setError(null);
     setWorkspaceTab(null);
-    setViewingBulkRun(false);
-    const runBatchIds: string[] = [];
+    setViewingHistoryBatchId(null);
 
     for (let i = 0; i < selectedSKUs.length; i++) {
       const sku = selectedSKUs[i];
       setBulkProgress({ current: i + 1, total: selectedSKUs.length, skuName: sku.name });
+      setBulkCurrentSKUId(sku.id);
 
-      // Merge supporting assets + this SKU's product assets
       const skuFiles: UploadedFiles = { ...supportingAssets };
       Object.entries(sku.productAssets).forEach(([k, f]: [string, AssetFile]) => {
         if (productKeys.has(k)) skuFiles[k as keyof UploadedFiles] = { data: f.data, mimeType: f.mimeType };
       });
 
-      const batchId = `${Date.now()}-sku${i}`;
+      const batchId = `${runId}-${i}`;
       const tracker: GeneratedImage[] = currentShots.map((shot, idx) => ({
         id: `${batchId}-${idx}`, prompt: shot.prompt, status: 'pending' as const,
       }));
 
       setLiveGenerationImages([...tracker]);
-      setViewingHistoryBatchId(null);
 
       const localProgress = (index: number, update: Partial<GeneratedImage>) => {
         tracker[index] = { ...tracker[index], ...update };
@@ -543,19 +548,18 @@ function App() {
         projectId: activeProject.id,
         skuId: sku.id,
         skuName: sku.name,
+        bulkRunId: runId,
         timestamp: Date.now(),
-        images: tracker,
+        images: [...tracker],
         model: selectedModel,
         category: selectedCategory,
       };
       setGenerationHistory(prev => [completedBatch, ...prev]);
-      runBatchIds.push(batchId);
       db.saveGenerationBatch(completedBatch).catch(e => console.error('[app] bulk saveGenerationBatch:', e));
     }
 
-    setBulkRunBatchIds(runBatchIds);
-    setViewingBulkRun(true);
-    setViewingHistoryBatchId(null);
+    setBulkCurrentSKUId(null);
+    setLiveGenerationImages([]);
     setIsBulkGenerating(false);
     setBulkProgress(null);
   }, [activeProject, bulkSelectedSKUIds, skus, selectedCategory, uploadedFiles, currentShots, selectedModel, brandName, stylingConfig, cameraConfig, apiProvider, apiKey, kieApiKey]);
@@ -564,9 +568,101 @@ function App() {
     setActiveProject(null);
     setIsCreatingProject(false);
     setView('dashboard');
-    setViewingBulkRun(false);
-    setBulkRunBatchIds([]);
+    setBulkRunId(null);
+    setBulkRunSKUs([]);
+    setBulkCurrentSKUId(null);
+    setShowBulkOverlay(false);
   };
+
+  const bulkBatches = useMemo(() =>
+    bulkRunId ? generationHistory.filter(b => b.bulkRunId === bulkRunId) : [],
+    [generationHistory, bulkRunId]
+  );
+
+  const handleRetryBulkShot = useCallback(async (batchId: string, imageIndex: number) => {
+    const batch = generationHistory.find(b => b.id === batchId);
+    if (!batch || !activeProject) return;
+
+    const productKeys = new Set<string>(PRODUCT_SLOT_KEYS[selectedCategory] || []);
+    const sku = batch.skuId ? skus.find(s => s.id === batch.skuId) : null;
+
+    const supportingAssets: UploadedFiles = {};
+    Object.entries(uploadedFiles).forEach(([k, v]) => {
+      if (!productKeys.has(k)) supportingAssets[k as keyof UploadedFiles] = v as UploadedFiles[keyof UploadedFiles];
+    });
+
+    const skuFiles: UploadedFiles = { ...supportingAssets };
+    if (sku) {
+      Object.entries(sku.productAssets).forEach(([k, f]: [string, AssetFile]) => {
+        if (productKeys.has(k)) skuFiles[k as keyof UploadedFiles] = { data: f.data, mimeType: f.mimeType };
+      });
+    }
+
+    const patchHistory = (update: Partial<GeneratedImage>) => {
+      setGenerationHistory(prev => prev.map(b => b.id !== batchId ? b : {
+        ...b,
+        images: b.images.map((img, i) => i === imageIndex ? { ...img, ...update } : img),
+      }));
+    };
+
+    patchHistory({ status: 'generating', errorMessage: undefined });
+
+    const shot = currentShots[imageIndex] || { prompt: batch.images[imageIndex]?.prompt || '' };
+
+    try {
+      const modelConfig = MODEL_CONFIGS[selectedModel];
+      if (apiProvider === 'kie') {
+        await kieService.generateSingleTryOnImage(skuFiles.characterFace, skuFiles, modelConfig, shot, brandName, selectedCategory, activeProject.environment, activeProject.lighting, stylingConfig, cameraConfig, activeProject.negativePrompt, activeProject.seed, activeProject.fashionType, activeProject.mood, imageIndex, (_i, update) => patchHistory(update), batchId);
+      } else {
+        await geminiService.generateSingleTryOnImage(skuFiles.characterFace, skuFiles, modelConfig, shot, brandName, selectedCategory, activeProject.environment, activeProject.lighting, stylingConfig, cameraConfig, activeProject.negativePrompt, activeProject.seed, activeProject.fashionType, activeProject.mood, imageIndex, (_i, update) => patchHistory(update));
+      }
+    } catch (e: any) {
+      patchHistory({ status: 'failed', errorMessage: e.message || 'Retry failed' });
+    }
+  }, [generationHistory, activeProject, selectedCategory, skus, uploadedFiles, currentShots, selectedModel, brandName, stylingConfig, cameraConfig, apiProvider, apiKey, kieApiKey]);
+
+  const handleDownloadSKU = useCallback(async (batchId: string, skuName: string) => {
+    const batch = generationHistory.find(b => b.id === batchId);
+    if (!batch) return;
+    const successImages = batch.images.filter(img => img.status === 'success' && img.url);
+    if (!successImages.length) return;
+    // @ts-ignore
+    const zip = new window.JSZip();
+    await Promise.all(successImages.map(async (img, i) => {
+      try {
+        const blob = await (await fetch(img.url!)).blob();
+        zip.file(`${skuName}_Shot_${String(i + 1).padStart(2, '0')}.jpg`, blob);
+      } catch {}
+    }));
+    const content = await zip.generateAsync({ type: 'blob' });
+    const url = window.URL.createObjectURL(content);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${skuName}_shots.zip`;
+    document.body.appendChild(a); a.click(); a.remove();
+    window.URL.revokeObjectURL(url);
+  }, [generationHistory]);
+
+  const handleDownloadAllSKUs = useCallback(async () => {
+    if (!bulkBatches.length) return;
+    // @ts-ignore
+    const zip = new window.JSZip();
+    await Promise.all(bulkBatches.map(async batch => {
+      const name = batch.skuName || batch.id;
+      const folder = zip.folder(name);
+      await Promise.all(batch.images.filter(img => img.status === 'success' && img.url).map(async (img, i) => {
+        try {
+          const blob = await (await fetch(img.url!)).blob();
+          folder?.file(`Shot_${String(i + 1).padStart(2, '0')}.jpg`, blob);
+        } catch {}
+      }));
+    }));
+    const content = await zip.generateAsync({ type: 'blob' });
+    const url = window.URL.createObjectURL(content);
+    const a = document.createElement('a');
+    a.href = url; a.download = `bulk_run_${Date.now()}.zip`;
+    document.body.appendChild(a); a.click(); a.remove();
+    window.URL.revokeObjectURL(url);
+  }, [bulkBatches]);
 
   const handleFileUpload = useCallback((key: keyof UploadedFiles, base64: string, mimeType: string) => {
     setUploadedFiles((prev) => ({ ...prev, [key]: { data: base64, mimeType } }));
@@ -698,7 +794,8 @@ function App() {
 
     setError(null);
     setIsLoading(true);
-    setViewingBulkRun(false);
+    setBulkRunId(null);
+    setBulkRunSKUs([]);
 
     const newBatchId = Date.now().toString();
     setActiveGenerationMeta({
@@ -1058,7 +1155,9 @@ function App() {
 
   const handleViewCurrentGeneration = useCallback(() => {
     setViewingHistoryBatchId(null);
-    setViewingBulkRun(false);
+    setBulkRunId(null);
+    setBulkRunSKUs([]);
+    setBulkCurrentSKUId(null);
     if (outputPreviewRef.current) outputPreviewRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
 
@@ -1222,13 +1321,32 @@ function App() {
             </div>
           )}
 
-          {bulkRunBatchIds.length > 0 && !viewingBulkRun && (
-            <button onClick={() => { setViewingBulkRun(true); setViewingHistoryBatchId(null); }} style={{ fontSize: 10, color: WS.gold, background: 'none', border: `1px solid ${WS.border}`, borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 5 }}>
-              <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4" style={{ width: 8, height: 8 }}><rect x="1" y="1" width="3.5" height="3.5" rx="0.5"/><rect x="5.5" y="1" width="3.5" height="3.5" rx="0.5"/><rect x="1" y="5.5" width="3.5" height="3.5" rx="0.5"/><rect x="5.5" y="5.5" width="3.5" height="3.5" rx="0.5"/></svg>
-              Bulk Results
+          {/* Bulk run status */}
+          {isBulkGenerating && bulkProgress && (
+            <span style={{ fontSize: 10, color: WS.gold }}>
+              Bulk {bulkProgress.current}/{bulkProgress.total} · {liveGenerationImages.filter(i => i.status === 'success').length + bulkBatches.reduce((s, b) => s + b.images.filter(i => i.status === 'success').length, 0)} shots done
+            </span>
+          )}
+          {bulkRunId && !isBulkGenerating && (
+            <span style={{ fontSize: 10, color: WS.txtSec }}>
+              Bulk complete · {bulkBatches.reduce((s, b) => s + b.images.filter(i => i.status === 'success').length, 0)}/{bulkRunSKUs.length * currentShots.length} shots
+            </span>
+          )}
+          {bulkRunId && !isBulkGenerating && bulkBatches.some(b => b.images.some(i => i.status === 'success')) && (
+            <button
+              onClick={handleDownloadAllSKUs}
+              style={{ fontSize: 10, color: WS.txtSec, background: 'none', border: `1px solid ${WS.border}`, borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: 5, transition: 'all 0.12s' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = WS.borderHi; (e.currentTarget as HTMLElement).style.color = WS.txtMid; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = WS.border; (e.currentTarget as HTMLElement).style.color = WS.txtSec; }}
+            >
+              <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" style={{ width: 11, height: 11 }}>
+                <path d="M2 10v2a1 1 0 001 1h8a1 1 0 001-1v-2" strokeLinecap="round"/>
+                <path d="M7 1v8M4.5 6.5L7 9l2.5-2.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              Download all SKUs
             </button>
           )}
-          {(viewingHistoryBatchId || viewingBulkRun) && (
+          {viewingHistoryBatchId && (
             <button onClick={handleViewCurrentGeneration} style={{ fontSize: 10, color: WS.gold, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>← Live</button>
           )}
 
@@ -1259,7 +1377,7 @@ function App() {
         )}
 
         {/* Empty: project but no images */}
-        {activeProject && displayedImages.length === 0 && !isLoading && !isLoadingProject && !viewingBulkRun && !isBulkGenerating && (
+        {activeProject && displayedImages.length === 0 && !isLoading && !isLoadingProject && !bulkRunId && !isBulkGenerating && (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
             <div style={{ width: 64, height: 64, borderRadius: '50%', border: `1px solid ${WS.borderHi}`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 20 }}>
               <svg viewBox="0 0 24 24" fill="none" stroke={WS.txtSec} strokeWidth="1" style={{ width: 28, height: 28 }}><path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z"/><path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM18.75 10.5h.008v.008h-.008V10.5z"/></svg>
@@ -1278,69 +1396,32 @@ function App() {
           </div>
         )}
 
-        {/* ── Bulk Results grouped view ── */}
-        {viewingBulkRun && bulkRunBatchIds.length > 0 && (() => {
-          const bulkBatches = bulkRunBatchIds
-            .map(id => generationHistory.find(b => b.id === id))
-            .filter(Boolean) as GenerationBatch[];
-          return (
-            <div style={{ padding: 24 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
-                <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 18, fontStyle: 'italic', color: WS.txtPri }}>Bulk Results</span>
-                <span style={{ fontSize: 10, color: WS.txtSec }}>{bulkBatches.length} SKU{bulkBatches.length !== 1 ? 's' : ''} · {bulkBatches.reduce((sum, b) => sum + b.images.filter(i => i.status === 'success').length, 0)} images generated</span>
-              </div>
-              {bulkBatches.map(batch => {
-                const successCount = batch.images.filter(i => i.status === 'success').length;
-                return (
-                  <div key={batch.id} style={{ marginBottom: 28 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, paddingBottom: 8, borderBottom: `1px solid ${WS.border}` }}>
-                      <div style={{ width: 6, height: 6, borderRadius: '50%', background: successCount > 0 ? '#4CAF50' : '#E57373', flexShrink: 0 }} />
-                      <span style={{ fontSize: 12, fontWeight: 500, color: WS.txtPri }}>{batch.skuName || 'SKU'}</span>
-                      <span style={{ fontSize: 9, color: WS.txtSec }}>{successCount}/{batch.images.length} shots</span>
-                      <button onClick={() => { setViewingBulkRun(false); handleViewHistoryBatch(batch.id); }} style={{ marginLeft: 'auto', fontSize: 9, color: WS.txtSec, background: 'none', border: `1px solid ${WS.border}`, borderRadius: 3, cursor: 'pointer', padding: '3px 8px', fontFamily: 'inherit', transition: 'color 0.1s' }} onMouseEnter={e => (e.currentTarget.style.color = WS.txtPri)} onMouseLeave={e => (e.currentTarget.style.color = WS.txtSec)}>View full →</button>
-                    </div>
-                    <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 4 }}>
-                      {batch.images.map((image, index) => (
-                        <div key={image.id} style={{ flexShrink: 0, width: 140 }}>
-                          <div style={{ aspectRatio: '3/4', background: WS.surfHi, borderRadius: 6, overflow: 'hidden', border: `1px solid ${WS.border}`, position: 'relative' }}>
-                            {image.url ? (
-                              <img src={image.url} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} alt={`${batch.skuName} shot ${index + 1}`} />
-                            ) : (
-                              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                {image.status === 'failed' ? <span style={{ fontSize: 9, color: '#E57373', textAlign: 'center', padding: '0 8px' }}>Failed</span> : <span style={{ fontSize: 9, color: WS.txtSec }}>–</span>}
-                              </div>
-                            )}
-                            {image.url && image.status === 'success' && (
-                              <button onClick={() => handleDownloadImage(image.url, `${batch.skuName}_Shot_${String(index+1).padStart(2,'0')}.jpg`)} style={{ position: 'absolute', bottom: 6, right: 6, width: 26, height: 26, borderRadius: '50%', background: 'rgba(0,0,0,0.6)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0, transition: 'opacity 0.15s' }} className="bulk-dl-btn">
-                                <svg viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth="1.5" style={{ width: 10, height: 10 }}><path d="M2 9v1.5a.5.5 0 00.5.5h7a.5.5 0 00.5-.5V9" strokeLinecap="round"/><path d="M6 1v7M4 6l2 2 2-2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                              </button>
-                            )}
-                          </div>
-                          <div style={{ marginTop: 4, fontSize: 8, color: WS.txtSec, textAlign: 'center' }}>Shot {index + 1}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })()}
-
-        {/* ── Bulk-generating live progress ── */}
-        {isBulkGenerating && bulkProgress && (
-          <div style={{ padding: '16px 24px 0' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-              <div style={{ width: 9, height: 9, border: `1.5px solid ${WS.gold}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite', flexShrink: 0 }} />
-              <span style={{ fontSize: 11, color: WS.txtMid }}>Generating</span>
-              <span style={{ fontSize: 11, fontWeight: 500, color: WS.txtPri }}>{bulkProgress.skuName}</span>
-              <span style={{ fontSize: 10, color: WS.txtSec }}>{bulkProgress.current}/{bulkProgress.total}</span>
-            </div>
-          </div>
+        {/* ── Bulk run canvas (live + results) ── */}
+        {bulkRunId && bulkRunSKUs.length > 0 && (
+          <BulkResultsCanvas
+            runSKUs={bulkRunSKUs}
+            batches={bulkBatches}
+            currentSKUId={bulkCurrentSKUId}
+            liveImages={liveGenerationImages}
+            shotCount={currentShots.length || 1}
+            primarySlot={(() => {
+              const keys = PRODUCT_SLOT_KEYS[selectedCategory] || [];
+              return keys[0] || 'productImage';
+            })()}
+            isBulkGenerating={isBulkGenerating}
+            onRetryShot={handleRetryBulkShot}
+            onDownloadImage={handleDownloadImage}
+            onDownloadSKU={handleDownloadSKU}
+            onSelectImage={url => {
+              setLiveGenerationImages([{ id: 'bulk-select', prompt: '', status: 'success', url }]);
+              setViewingHistoryBatchId(null);
+              setBulkRunId(null);
+            }}
+          />
         )}
 
         {/* Images grid */}
-        {!viewingBulkRun && displayedImages.length > 0 && (
+        {!bulkRunId && displayedImages.length > 0 && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 16, padding: 24 }}>
             {displayedImages.map((image, index) => (
               <div key={image.id} className="ws-img-card" style={{ position: 'relative' }}>
@@ -1395,6 +1476,29 @@ function App() {
           </div>
         )}
       </main>
+
+      {/* ── Bulk confirm overlay ── */}
+      {showBulkOverlay && activeProject && (() => {
+        const productKeys = new Set<string>(PRODUCT_SLOT_KEYS[selectedCategory] || []);
+        const supportingSlots = getAllSlotsForCategory(selectedCategory)
+          .filter(s => !productKeys.has(s.key));
+        const primarySlot = (PRODUCT_SLOT_KEYS[selectedCategory] || [])[0] || 'productImage';
+        const selectedSKUs = skus.filter(s => bulkSelectedSKUIds.has(s.id));
+        return (
+          <BulkConfirmOverlay
+            skus={selectedSKUs}
+            uploadedFiles={uploadedFiles}
+            supportingSlotLabels={supportingSlots.map(s => ({ key: s.key, label: s.label }))}
+            shotCount={currentShots.length}
+            primarySlot={primarySlot}
+            onGenerate={handleBulkGenerate}
+            onCancel={() => setShowBulkOverlay(false)}
+            onRemoveSKU={skuId => {
+              setBulkSelectedSKUIds(prev => { const n = new Set(prev); n.delete(skuId); return n; });
+            }}
+          />
+        );
+      })()}
 
       {/* ── Bottom panel (expands up) ── */}
       {workspaceTab && activeProject && (
@@ -1529,69 +1633,112 @@ function App() {
 
               return (
                 <div>
-                  {/* SKU grid header */}
-                  {skus.length > 0 && (
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          <span style={{ fontSize: 10, color: WS.txtSec }}>{skus.length} SKU{skus.length !== 1 ? 's' : ''}</span>
-                          <button onClick={() => setBulkSelectedSKUIds(bulkSelectedSKUIds.size === skus.length ? new Set() : new Set(skus.map(s => s.id)))} style={{ fontSize: 9, color: WS.txtSec, background: 'none', border: `1px solid ${WS.border}`, borderRadius: 3, cursor: 'pointer', padding: '3px 8px', fontFamily: 'inherit', transition: 'color 0.1s' }} onMouseEnter={e => (e.currentTarget.style.color = WS.txtPri)} onMouseLeave={e => (e.currentTarget.style.color = WS.txtSec)}>
-                            {bulkSelectedSKUIds.size === skus.length ? 'Deselect all' : 'Select all'}
-                          </button>
-                          {bulkSelectedSKUIds.size > 0 && (
-                            <span style={{ fontSize: 9, color: WS.gold }}>{bulkSelectedSKUIds.size} selected</span>
+                  {/* SKU controls header — always visible */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ fontSize: 10, color: WS.txtSec }}>
+                        {skus.length} SKU{skus.length !== 1 ? 's' : ''}
+                      </span>
+                      {skus.length > 0 && (
+                        <button
+                          onClick={() => setBulkSelectedSKUIds(
+                            bulkSelectedSKUIds.size === skus.length ? new Set() : new Set(skus.map(s => s.id))
                           )}
-                        </div>
-                        {bulkSelectedSKUIds.size > 0 && (
-                          <button
-                            onClick={handleBulkGenerate}
-                            disabled={isBulkGenerating}
-                            style={{ padding: '7px 16px', background: WS.gold, color: WS.bg, border: 'none', borderRadius: 20, fontSize: 10, fontWeight: 600, cursor: isBulkGenerating ? 'not-allowed' : 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6, opacity: isBulkGenerating ? 0.6 : 1, transition: 'opacity 0.12s' }}
-                          >
-                            {isBulkGenerating ? (
-                              <><div style={{ width: 9, height: 9, border: '1.5px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />{bulkProgress?.current}/{bulkProgress?.total}</>
-                            ) : (
-                              <><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 10, height: 10 }}><path d="M6 1l1.2 3.5L11 6l-3.8 1.5L6 11l-1.2-3.5L1 6l3.8-1.5L6 1z" strokeLinejoin="round"/></svg>Generate {bulkSelectedSKUIds.size} SKU{bulkSelectedSKUIds.size !== 1 ? 's' : ''}</>
-                            )}
-                          </button>
-                        )}
-                      </div>
+                          style={{ fontSize: 9, color: WS.txtSec, background: 'none', border: `1px solid ${WS.border}`, borderRadius: 3, cursor: 'pointer', padding: '3px 8px', fontFamily: 'inherit' }}
+                          onMouseEnter={e => (e.currentTarget.style.color = WS.txtPri)}
+                          onMouseLeave={e => (e.currentTarget.style.color = WS.txtSec)}
+                        >
+                          {bulkSelectedSKUIds.size === skus.length && skus.length > 0 ? 'Deselect all' : 'Select all'}
+                        </button>
+                      )}
+                      {bulkSelectedSKUIds.size > 0 && (
+                        <span style={{ fontSize: 9, color: WS.gold }}>{bulkSelectedSKUIds.size} selected</span>
+                      )}
+                    </div>
+                  </div>
 
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 20 }}>
-                        {skus.map(sku => {
-                          const isActive = activeSKUId === sku.id;
-                          const isSelected = bulkSelectedSKUIds.has(sku.id);
-                          const thumb = sku.productAssets[primarySlot];
-                          return (
-                            <div key={sku.id} style={{ position: 'relative' }}>
-                              {/* Bulk select checkbox */}
-                              <button
-                                onClick={() => setBulkSelectedSKUIds(prev => { const n = new Set(prev); isSelected ? n.delete(sku.id) : n.add(sku.id); return n; })}
-                                style={{ position: 'absolute', top: 2, left: 2, zIndex: 2, width: 16, height: 16, borderRadius: 3, border: `1.5px solid ${isSelected ? WS.gold : WS.border}`, background: isSelected ? WS.gold : WS.surfHi, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.1s' }}
-                                title={isSelected ? 'Deselect' : 'Select for bulk generate'}
-                              >
-                                {isSelected && <svg viewBox="0 0 10 10" fill="none" stroke={WS.bg} strokeWidth="1.8" style={{ width: 8, height: 8 }}><path d="M2 5l2.5 2.5L8 3" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                              </button>
-                              <button
-                                onClick={() => handleSelectSKU(sku.id)}
-                                style={{ width: 90, background: 'none', border: `2px solid ${isActive ? WS.gold : isSelected ? WS.gold + '50' : WS.border}`, borderRadius: 6, cursor: 'pointer', padding: 6, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, transition: 'border-color 0.12s' }}
-                                title="Use this SKU's assets for generation"
-                              >
-                                <div style={{ width: 68, height: 68, borderRadius: 4, background: WS.surfHi, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                  {thumb ? (
-                                    <img src={`data:${thumb.mimeType};base64,${thumb.data}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt={sku.name} />
-                                  ) : (
-                                    <svg viewBox="0 0 16 16" fill="none" stroke={WS.txtSec} strokeWidth="1.2" style={{ width: 20, height: 20 }}><rect x="1" y="2" width="14" height="12" rx="1.5"/><path d="M1 11l3.5-3 3 2.5 3-3 4 3.5" strokeLinecap="round"/></svg>
-                                  )}
-                                </div>
-                                <div style={{ fontSize: 9, color: isActive ? WS.gold : WS.txtSec, textAlign: 'center', wordBreak: 'break-word', lineHeight: 1.3, maxWidth: 76 }}>{sku.name}</div>
-                                {sku.skuCode && <div style={{ fontSize: 8, color: WS.txtSec, fontVariantNumeric: 'tabular-nums' }}>{sku.skuCode}</div>}
-                              </button>
-                              <button onClick={() => handleDeleteSKU(sku.id)} style={{ position: 'absolute', top: -4, right: -4, width: 16, height: 16, borderRadius: '50%', background: WS.borderHi, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: WS.txtSec, fontSize: 9 }} title="Delete SKU">×</button>
-                            </div>
-                          );
-                        })}
-                      </div>
+                  {/* SKU card grid */}
+                  {skus.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 20 }}>
+                      {skus.map(sku => {
+                        const isActive = activeSKUId === sku.id;
+                        const isSelected = bulkSelectedSKUIds.has(sku.id);
+                        const thumb = sku.productAssets[primarySlot];
+                        return (
+                          <div key={sku.id} style={{ position: 'relative' }}>
+                            {/* Checkbox */}
+                            <button
+                              onClick={() => setBulkSelectedSKUIds(prev => {
+                                const n = new Set(prev);
+                                isSelected ? n.delete(sku.id) : n.add(sku.id);
+                                return n;
+                              })}
+                              style={{
+                                position: 'absolute', top: 4, left: 4, zIndex: 2,
+                                width: 18, height: 18, borderRadius: 4,
+                                border: `1.5px solid ${isSelected ? WS.gold : WS.border}`,
+                                background: isSelected ? WS.gold : 'rgba(10,9,8,0.7)',
+                                cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                transition: 'all 0.1s',
+                              }}
+                              title={isSelected ? 'Deselect' : 'Select for bulk'}
+                            >
+                              {isSelected && (
+                                <svg viewBox="0 0 10 10" fill="none" stroke={WS.bg} strokeWidth="2" style={{ width: 8, height: 8 }}>
+                                  <path d="M2 5l2.5 2.5L8 3" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              )}
+                            </button>
+
+                            {/* Card body */}
+                            <button
+                              onClick={() => handleSelectSKU(sku.id)}
+                              style={{
+                                width: 110, background: 'none',
+                                border: `2px solid ${isActive ? WS.gold : isSelected ? WS.gold + '40' : WS.border}`,
+                                borderRadius: 8, cursor: 'pointer', padding: '6px 6px 8px',
+                                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5,
+                                transition: 'border-color 0.12s',
+                              }}
+                              title="Use this SKU's assets"
+                            >
+                              <div style={{
+                                width: 88, height: 88, borderRadius: 4, background: WS.surfHi,
+                                overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              }}>
+                                {thumb ? (
+                                  <img src={`data:${thumb.mimeType};base64,${thumb.data}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt={sku.name} />
+                                ) : (
+                                  <svg viewBox="0 0 16 16" fill="none" stroke={WS.txtSec} strokeWidth="1.2" style={{ width: 22, height: 22 }}>
+                                    <rect x="1" y="2" width="14" height="12" rx="1.5" />
+                                    <path d="M1 11l3.5-3 3 2.5 3-3 4 3.5" strokeLinecap="round" />
+                                  </svg>
+                                )}
+                              </div>
+                              <div style={{ fontSize: 10, color: isActive ? WS.gold : WS.txtSec, textAlign: 'center', wordBreak: 'break-word', lineHeight: 1.3, maxWidth: 96, width: '100%' }}>
+                                {sku.name}
+                              </div>
+                              {sku.skuCode && (
+                                <div style={{ fontSize: 8, color: WS.txtSec }}>{sku.skuCode}</div>
+                              )}
+                            </button>
+
+                            {/* Delete button */}
+                            <button
+                              onClick={() => handleDeleteSKU(sku.id)}
+                              style={{
+                                position: 'absolute', top: -4, right: -4, width: 17, height: 17,
+                                borderRadius: '50%', background: WS.borderHi, border: 'none',
+                                cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                color: WS.txtSec, fontSize: 10,
+                              }}
+                              title="Delete SKU"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
 
@@ -1639,9 +1786,10 @@ function App() {
               </span>
               <span style={{ color: WS.borderHi, fontSize: 10 }}>·</span>
               <span style={{ fontSize: 10, color: WS.txtMid }}>{currentShots.length} shots</span>
-              {isBulkGenerating && bulkProgress ? (
-                <><span style={{ color: WS.borderHi, fontSize: 10 }}>·</span><span style={{ fontSize: 10, color: WS.gold }}>Bulk {bulkProgress.current}/{bulkProgress.total}: {bulkProgress.skuName}</span></>
-              ) : activeSKUId ? (() => { const s = skus.find(x => x.id === activeSKUId); return s ? (<><span style={{ color: WS.borderHi, fontSize: 10 }}>·</span><span style={{ fontSize: 10, color: WS.gold }}>{s.name}</span></>) : null; })() : null}
+              {activeSKUId && !isBulkGenerating && (() => { const s = skus.find(x => x.id === activeSKUId); return s ? (<><span style={{ color: WS.borderHi, fontSize: 10 }}>·</span><span style={{ fontSize: 10, color: WS.gold }}>{s.name}</span></>) : null; })()}
+              {bulkSelectedSKUIds.size >= 2 && (
+                <><span style={{ color: WS.borderHi, fontSize: 10 }}>·</span><span style={{ fontSize: 10, color: WS.gold }}>{bulkSelectedSKUIds.size} selected</span></>
+              )}
               {isLoading && (
                 <>
                   <span style={{ color: WS.borderHi, fontSize: 10 }}>·</span>
@@ -1687,26 +1835,39 @@ function App() {
               <div style={{ fontSize: 9, color: '#E57373', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={error}>⚠ {error}</div>
             )}
 
-            {/* Generate button */}
-            <button
-              onClick={handleGenerateTryOn}
-              disabled={!isFormValid || (apiProvider === 'google' ? !apiKey : !kieApiKey) || isLoading}
-              style={{ padding: '9px 22px', borderRadius: 40, background: isFormValid && (apiProvider === 'google' ? apiKey : kieApiKey) && !isLoading ? WS.gold : '#2A2622', color: isFormValid && (apiProvider === 'google' ? apiKey : kieApiKey) && !isLoading ? WS.bg : WS.txtMid, border: `1px solid ${isFormValid && (apiProvider === 'google' ? apiKey : kieApiKey) && !isLoading ? 'transparent' : WS.borderHi}`, fontSize: 11, fontWeight: 600, cursor: isFormValid && (apiProvider === 'google' ? apiKey : kieApiKey) && !isLoading ? 'pointer' : 'not-allowed', fontFamily: 'inherit', transition: 'all 0.15s', display: 'flex', alignItems: 'center', gap: 7 }}
-              onMouseEnter={e => { if (isFormValid && !isLoading) (e.currentTarget as HTMLElement).style.opacity = '0.88'; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
-            >
-              {isLoading ? (
-                <>
-                  <div style={{ width: 11, height: 11, border: '1.5px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite', flexShrink: 0 }} />
-                  {completedImagesCount}/{imagesToGenerateCount}
-                </>
-              ) : (
-                <>
-                  <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 11, height: 11 }}><path d="M7 1l1.5 4.5L13 7l-4.5 1.5L7 13l-1.5-4.5L1 7l4.5-1.5L7 1z" strokeLinejoin="round"/></svg>
-                  Generate
-                </>
-              )}
-            </button>
+            {/* Generate / Run Batch button */}
+            {bulkSelectedSKUIds.size >= 2 ? (
+              <button
+                onClick={() => setShowBulkOverlay(true)}
+                disabled={isBulkGenerating}
+                style={{ padding: '9px 22px', borderRadius: 40, background: WS.gold, color: WS.bg, border: 'none', fontSize: 11, fontWeight: 600, cursor: isBulkGenerating ? 'not-allowed' : 'pointer', fontFamily: 'inherit', transition: 'all 0.15s', display: 'flex', alignItems: 'center', gap: 7, opacity: isBulkGenerating ? 0.5 : 1 }}
+                onMouseEnter={e => { if (!isBulkGenerating) (e.currentTarget as HTMLElement).style.opacity = '0.88'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
+              >
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 11, height: 11 }}><path d="M7 1l1.5 4.5L13 7l-4.5 1.5L7 13l-1.5-4.5L1 7l4.5-1.5L7 1z" strokeLinejoin="round"/></svg>
+                Run Batch ({bulkSelectedSKUIds.size})
+              </button>
+            ) : (
+              <button
+                onClick={handleGenerateTryOn}
+                disabled={!isFormValid || (apiProvider === 'google' ? !apiKey : !kieApiKey) || isLoading}
+                style={{ padding: '9px 22px', borderRadius: 40, background: isFormValid && (apiProvider === 'google' ? apiKey : kieApiKey) && !isLoading ? WS.gold : '#2A2622', color: isFormValid && (apiProvider === 'google' ? apiKey : kieApiKey) && !isLoading ? WS.bg : WS.txtMid, border: `1px solid ${isFormValid && (apiProvider === 'google' ? apiKey : kieApiKey) && !isLoading ? 'transparent' : WS.borderHi}`, fontSize: 11, fontWeight: 600, cursor: isFormValid && (apiProvider === 'google' ? apiKey : kieApiKey) && !isLoading ? 'pointer' : 'not-allowed', fontFamily: 'inherit', transition: 'all 0.15s', display: 'flex', alignItems: 'center', gap: 7 }}
+                onMouseEnter={e => { if (isFormValid && !isLoading) (e.currentTarget as HTMLElement).style.opacity = '0.88'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
+              >
+                {isLoading ? (
+                  <>
+                    <div style={{ width: 11, height: 11, border: '1.5px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite', flexShrink: 0 }} />
+                    {completedImagesCount}/{imagesToGenerateCount}
+                  </>
+                ) : (
+                  <>
+                    <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ width: 11, height: 11 }}><path d="M7 1l1.5 4.5L13 7l-4.5 1.5L7 13l-1.5-4.5L1 7l4.5-1.5L7 1z" strokeLinejoin="round"/></svg>
+                    Generate
+                  </>
+                )}
+              </button>
+            )}
           </div>
         </div>
       )}

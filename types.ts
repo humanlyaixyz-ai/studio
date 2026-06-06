@@ -71,6 +71,7 @@ export interface GenerationBatch {
   projectId?: string;
   skuId?: string;
   skuName?: string;
+  bulkRunId?: string; // groups batches from same bulk run; frontend-only, not persisted
   timestamp: number;
   images: GeneratedImage[];
   model: ModelType;
