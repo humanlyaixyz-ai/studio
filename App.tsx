@@ -9,6 +9,7 @@ import { CreateProject } from './pages/CreateProject';
 import { BulkConfirmOverlay } from './components/BulkConfirmOverlay';
 import { BulkResultsCanvas } from './components/BulkResultsCanvas';
 import { ImageEditPanel } from './components/ImageEditPanel';
+import { HistoryCanvas } from './components/HistoryCanvas';
 import { ModelType, UploadedFiles, GeneratedImage, ProductCategory, GenerationBatch, ActiveGenerationMeta, Project, StylingConfig, CameraConfig, ShotConfig, ApiProvider, AssetFile, SKU } from './types';
 import { geminiService, refineImageDetails, setGeminiApiKey } from './services/geminiService';
 import { kieService, setKieApiKey } from './services/kieService';
@@ -171,13 +172,12 @@ function App() {
   const [liveGenerationImages, setLiveGenerationImages] = useState<GeneratedImage[]>([]);
 
   const [generationHistory, setGenerationHistory] = useState<GenerationBatch[]>([]);
-  const [viewingHistoryBatchId, setViewingHistoryBatchId] = useState<string | null>(null);
 
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Edit panel state
-  const [selectedImageForEditIndex, setSelectedImageForEditIndex] = useState<number | null>(null);
+  // Edit panel state — tracks the image open in ImageEditPanel
+  const [selectedImageForEdit, setSelectedImageForEdit] = useState<{ image: GeneratedImage; index: number; isLive: boolean } | null>(null);
 
   const [isZipping, setIsZipping] = useState(false);
 
@@ -296,7 +296,7 @@ function App() {
             category: activeGenerationMeta.category,
           };
           setGenerationHistory(prev => [newBatch, ...prev]);
-          setViewingHistoryBatchId(activeGenerationMeta.id);
+          // removed: setViewingHistoryBatchId
           // Persist to Supabase (upload images to Storage + save metadata)
           db.saveGenerationBatch(newBatch).catch(e =>
             console.error('[app] Failed to save generation batch:', e)
@@ -393,7 +393,7 @@ function App() {
     setStylingConfig({ materialDescription: '' });
     setCameraConfig({ framing: '', angle: '', focalLength: '' });
     setLiveGenerationImages([]);
-    setViewingHistoryBatchId(null);
+    // removed: setViewingHistoryBatchId
     setError(null);
     setUploadedFiles({});
 
@@ -511,7 +511,7 @@ function App() {
     setIsBulkGenerating(true);
     setError(null);
     setWorkspaceTab(null);
-    setViewingHistoryBatchId(null);
+    // removed: setViewingHistoryBatchId
 
     for (let i = 0; i < selectedSKUs.length; i++) {
       const sku = selectedSKUs[i];
@@ -743,12 +743,7 @@ function App() {
     }
   }, [uploadedFiles, selectedCategory, activeProject]);
 
-  const displayedImages: GeneratedImage[] = useMemo(() => {
-    if (viewingHistoryBatchId) {
-      return generationHistory.find(batch => batch.id === viewingHistoryBatchId)?.images || [];
-    }
-    return liveGenerationImages;
-  }, [viewingHistoryBatchId, generationHistory, liveGenerationImages]);
+  const displayedImages: GeneratedImage[] = liveGenerationImages;
 
   // Filtered History for Dropdown
   const projectHistory = useMemo(() => {
@@ -759,22 +754,10 @@ function App() {
   }, [generationHistory, activeProject]);
 
   const handleUpdateDisplayedImage = useCallback((index: number, update: Partial<GeneratedImage>) => {
-    if (viewingHistoryBatchId) {
-      setGenerationHistory(prevHistory => prevHistory.map(batch => {
-        if (batch.id === viewingHistoryBatchId) {
-          return {
-            ...batch,
-            images: batch.images.map((img, i) => (i === index ? { ...img, ...update } : img))
-          };
-        }
-        return batch;
-      }));
-    } else {
-      setLiveGenerationImages((prev) =>
-        prev.map((img, i) => (i === index ? { ...img, ...update } : img))
-      );
-    }
-  }, [viewingHistoryBatchId]);
+    setLiveGenerationImages((prev) =>
+      prev.map((img, i) => (i === index ? { ...img, ...update } : img))
+    );
+  }, []);
 
   const handleLiveProgressUpdate = useCallback((index: number, update: Partial<GeneratedImage>) => {
     setLiveGenerationImages((prev) =>
@@ -812,7 +795,7 @@ function App() {
       category: selectedCategory,
       projectId: activeProject?.id
     });
-    setViewingHistoryBatchId(null);
+    // removed: setViewingHistoryBatchId
 
     const initialImages: GeneratedImage[] = currentShots.map((shot, i) => ({
       id: `${newBatchId}-${i}`,
@@ -1034,10 +1017,7 @@ function App() {
       ];
 
       let currentAspectRatio: any = '3:4';
-      if (viewingHistoryBatchId) {
-        const batch = generationHistory.find(b => b.id === viewingHistoryBatchId);
-        if (batch) currentAspectRatio = MODEL_CONFIGS[batch.model].aspectRatio;
-      } else if (activeGenerationMeta) {
+      if (activeGenerationMeta) {
         currentAspectRatio = MODEL_CONFIGS[activeGenerationMeta.model].aspectRatio;
       } else {
         currentAspectRatio = MODEL_CONFIGS[selectedModel].aspectRatio;
@@ -1054,7 +1034,7 @@ function App() {
     } catch (e: any) {
       handleUpdateDisplayedImage(index, { status: 'failed', errorMessage: e.message });
     }
-  }, [displayedImages, handleUpdateDisplayedImage, uploadedFiles, viewingHistoryBatchId, generationHistory, activeGenerationMeta, selectedModel, apiProvider]);
+  }, [displayedImages, handleUpdateDisplayedImage, uploadedFiles, activeGenerationMeta, selectedModel, apiProvider]);
 
   const handlePanelApplyColorGrading = useCallback((index: number, newBase64: string) => {
     handleUpdateDisplayedImage(index, { url: `data:image/jpeg;base64,${newBase64}` });
@@ -1113,42 +1093,21 @@ function App() {
     } catch (e) { setError("Zip Failed"); } finally { setIsZipping(false); }
   }, [displayedImages]);
 
-  const handleViewHistoryBatch = useCallback((batchId: string) => {
-    setViewingHistoryBatchId(batchId);
-    setSelectedImageForEditIndex(null);
-    if (outputPreviewRef.current) outputPreviewRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, []);
-
-  const handleViewCurrentGeneration = useCallback(() => {
-    setViewingHistoryBatchId(null);
-    setBulkRunId(null);
-    setBulkRunSKUs([]);
-    setBulkCurrentSKUId(null);
-    if (outputPreviewRef.current) outputPreviewRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, []);
-
   const handleClearHistory = useCallback(() => {
-    // Delete all project batches from Supabase in background
     projectHistory.forEach(batch => {
       db.deleteGenerationBatch(batch.id).catch(e =>
         console.error('[app] deleteGenerationBatch:', e)
       );
     });
     setGenerationHistory([]);
-    if (viewingHistoryBatchId !== null) handleViewCurrentGeneration();
-  }, [viewingHistoryBatchId, handleViewCurrentGeneration, projectHistory]);
+    setLiveGenerationImages([]);
+  }, [projectHistory]);
 
 
   const imagesToGenerateCount = currentShots.length;
   const completedImagesCount = liveGenerationImages.filter(img => img.status === 'success').length;
 
-  const currentOutputTitle = useMemo(() => {
-    if (viewingHistoryBatchId) {
-      const batch = generationHistory.find(b => b.id === viewingHistoryBatchId);
-      return batch ? `Archive: ${new Date(parseInt(batch.id, 10)).toLocaleDateString()}` : 'Archive';
-    }
-    return activeGenerationMeta ? 'Generating...' : activeProject ? activeProject.name : 'Output';
-  }, [viewingHistoryBatchId, generationHistory, activeGenerationMeta, activeProject]);
+  const currentOutputTitle = activeGenerationMeta ? 'Generating...' : activeProject ? activeProject.name : 'Output';
 
   // ── Dashboard view ────────────────────────────────────────
   if (view === 'dashboard') {
@@ -1242,84 +1201,6 @@ function App() {
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {/* History */}
-          {projectHistory.length > 0 && (
-            <div style={{ position: 'relative' }} className="history-wrap">
-              <button style={{ fontSize: 10, color: WS.txtSec, background: 'none', border: `1px solid transparent`, borderRadius: 4, cursor: 'pointer', fontFamily: 'inherit', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: 5, transition: 'all 0.12s' }} onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = WS.border; (e.currentTarget as HTMLElement).style.color = WS.txtPri; }} onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'transparent'; (e.currentTarget as HTMLElement).style.color = WS.txtSec; }}>
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" style={{ width: 11, height: 11 }}><circle cx="8" cy="8" r="6"/><path d="M8 5v3.5l2 1.5" strokeLinecap="round"/></svg>
-                History
-                <span style={{ background: WS.borderHi, borderRadius: 10, padding: '1px 5px', fontSize: 8, color: WS.txtSec }}>{projectHistory.length}</span>
-              </button>
-              <div className="history-dropdown" style={{ display: 'none', position: 'absolute', right: 0, top: '100%', marginTop: 6, width: 300, background: WS.surface, border: `1px solid ${WS.border}`, borderRadius: 8, overflow: 'hidden', zIndex: 60, boxShadow: '0 12px 48px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.03)' }}>
-                {/* Dropdown header */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', borderBottom: `1px solid ${WS.border}` }}>
-                  <span style={{ fontSize: 9, color: WS.txtSec, letterSpacing: '0.1em', fontWeight: 500 }}>GENERATION HISTORY</span>
-                  <button onClick={handleClearHistory} style={{ fontSize: 9, color: WS.txtSec, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4, transition: 'color 0.1s' }} onMouseEnter={e => (e.currentTarget.style.color = '#E57373')} onMouseLeave={e => (e.currentTarget.style.color = WS.txtSec)}>
-                    <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" style={{ width: 9, height: 9 }}><path d="M2 3h8M5 3V2h2v1M4 3l.5 7h3L8 3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    Clear all
-                  </button>
-                </div>
-                {/* Batch entries */}
-                <div style={{ maxHeight: 340, overflowY: 'auto', scrollbarWidth: 'thin' as const, scrollbarColor: `${WS.border} transparent` }}>
-                  {projectHistory.map(batch => {
-                    const successImgs = batch.images.filter(i => i.status === 'success');
-                    const failImgs = batch.images.filter(i => i.status === 'failed');
-                    const isViewing = viewingHistoryBatchId === batch.id;
-                    const batchDate = new Date(batch.timestamp);
-                    const isToday = batchDate.toDateString() === new Date().toDateString();
-                    const timeStr = batchDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                    const dateStr = isToday ? timeStr : batchDate.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + timeStr;
-                    return (
-                      <button key={batch.id} onClick={() => handleViewHistoryBatch(batch.id)} style={{ width: '100%', textAlign: 'left', padding: '10px 14px', background: isViewing ? WS.gold + '0A' : 'none', border: 'none', borderBottom: `1px solid ${WS.border}`, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', gap: 10, alignItems: 'flex-start', transition: 'background 0.1s', borderLeft: `2px solid ${isViewing ? WS.gold : 'transparent'}` }}
-                        onMouseEnter={e => { if (!isViewing) (e.currentTarget as HTMLElement).style.background = WS.surfHi; }}
-                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = isViewing ? WS.gold + '0A' : 'none'; }}
-                      >
-                        {/* Image strip */}
-                        <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
-                          {successImgs.slice(0, 3).map((img, i) => (
-                            <div key={i} style={{ width: 28, height: 36, borderRadius: 3, overflow: 'hidden', background: WS.surfHi, border: `1px solid ${WS.border}` }}>
-                              {img.url && <img src={img.url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" />}
-                            </div>
-                          ))}
-                          {successImgs.length === 0 && (
-                            <div style={{ width: 28, height: 36, borderRadius: 3, background: WS.surfHi, border: `1px solid ${WS.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                              <svg viewBox="0 0 12 12" fill="none" stroke={WS.border} strokeWidth="1.2" style={{ width: 12, height: 12 }}><rect x="1" y="1" width="10" height="10" rx="1"/><path d="M1 9l2.5-2.5 2 2 2.5-2.5L10 9" strokeLinecap="round"/></svg>
-                            </div>
-                          )}
-                        </div>
-                        {/* Meta */}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 11, color: isViewing ? WS.gold : WS.txtPri, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {batch.skuName || batch.model.replace(/_/g, ' ')}
-                          </div>
-                          <div style={{ fontSize: 9, color: WS.txtSec, marginTop: 2 }}>{dateStr}</div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                            {successImgs.length > 0 && (
-                              <span style={{ fontSize: 8, color: '#4CAF50', display: 'flex', alignItems: 'center', gap: 3 }}>
-                                <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#4CAF50', display: 'inline-block' }} />
-                                {successImgs.length} ok
-                              </span>
-                            )}
-                            {failImgs.length > 0 && (
-                              <span style={{ fontSize: 8, color: '#E57373', display: 'flex', alignItems: 'center', gap: 3 }}>
-                                <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#E57373', display: 'inline-block' }} />
-                                {failImgs.length} failed
-                              </span>
-                            )}
-                            {batch.category && (
-                              <span style={{ fontSize: 8, color: WS.txtSec, background: WS.surfHi, borderRadius: 3, padding: '1px 5px' }}>{batch.category}</span>
-                            )}
-                          </div>
-                        </div>
-                        <svg viewBox="0 0 10 10" fill="none" stroke={isViewing ? WS.gold : WS.border} strokeWidth="1.4" style={{ width: 9, height: 9, flexShrink: 0, marginTop: 4 }}><path d="M2 5h6M5.5 2.5L8 5l-2.5 2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              <style>{`.history-wrap:hover .history-dropdown { display: block !important; }`}</style>
-            </div>
-          )}
-
           {/* Bulk run status */}
           {isBulkGenerating && bulkProgress && (
             <span style={{ fontSize: 10, color: WS.gold }}>
@@ -1345,10 +1226,6 @@ function App() {
               Download all SKUs
             </button>
           )}
-          {viewingHistoryBatchId && (
-            <button onClick={handleViewCurrentGeneration} style={{ fontSize: 10, color: WS.gold, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>← Live</button>
-          )}
-
           <button onClick={handleBulkDownload} disabled={isZipping || !displayedImages.some(img => img.status === 'success' && img.url)} style={{ fontSize: 10, color: WS.txtSec, background: 'none', border: `1px solid ${WS.border}`, borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: 5, transition: 'all 0.12s', opacity: (isZipping || !displayedImages.some(img => img.status === 'success' && img.url)) ? 0.3 : 1 }} onMouseEnter={e => { if (!isZipping) { (e.currentTarget as HTMLElement).style.borderColor = WS.borderHi; (e.currentTarget as HTMLElement).style.color = WS.txtMid; } }} onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = WS.border; (e.currentTarget as HTMLElement).style.color = WS.txtSec; }}>
             <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" style={{ width: 11, height: 11 }}><path d="M2 10v2a1 1 0 001 1h8a1 1 0 001-1v-2" strokeLinecap="round"/><path d="M7 1v8M4.5 6.5L7 9l2.5-2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
             {isZipping ? 'Zipping…' : 'Download'}
@@ -1360,6 +1237,7 @@ function App() {
       <main ref={outputPreviewRef} style={{ flex: 1, overflowY: 'auto', position: 'relative', paddingBottom: workspaceTab ? 340 : 90 }}>
 
         {/* Empty: no project */}
+        {/* No project */}
         {!activeProject && (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
             <svg viewBox="0 0 24 24" fill="none" stroke={WS.txtSec} strokeWidth="1" style={{ width: 48, height: 48, marginBottom: 12 }}><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/></svg>
@@ -1375,27 +1253,7 @@ function App() {
           </div>
         )}
 
-        {/* Empty: project but no images */}
-        {activeProject && displayedImages.length === 0 && !isLoading && !isLoadingProject && !bulkRunId && !isBulkGenerating && (
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-            <div style={{ width: 64, height: 64, borderRadius: '50%', border: `1px solid ${WS.borderHi}`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 20 }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke={WS.txtSec} strokeWidth="1" style={{ width: 28, height: 28 }}><path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z"/><path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM18.75 10.5h.008v.008h-.008V10.5z"/></svg>
-            </div>
-            <h3 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 22, fontStyle: 'italic', fontWeight: 400, color: WS.txtPri, marginBottom: 8 }}>Ready to generate</h3>
-            <p style={{ fontSize: 11, color: WS.txtMid, marginBottom: 6 }}>Upload your assets, then hit Generate.</p>
-            <p style={{ fontSize: 10, color: WS.txtSec }}>Open <strong style={{ color: WS.gold }}>Inputs</strong> from the bar below to upload.</p>
-          </div>
-        )}
-
-        {/* Generating spinner overlay */}
-        {isLoading && displayedImages.length === 0 && (
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', zIndex: 10 }}>
-            <div style={{ width: 40, height: 40, border: `3px solid ${WS.gold}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite', marginBottom: 16 }} />
-            <p style={{ fontSize: 12, color: WS.txtMid }}>Generating…</p>
-          </div>
-        )}
-
-        {/* ── Bulk run canvas (live + results) ── */}
+        {/* ── Bulk run canvas ── */}
         {bulkRunId && bulkRunSKUs.length > 0 && (
           <BulkResultsCanvas
             runSKUs={bulkRunSKUs}
@@ -1413,58 +1271,24 @@ function App() {
             onDownloadSKU={handleDownloadSKU}
             onSelectImage={url => {
               setLiveGenerationImages([{ id: 'bulk-select', prompt: '', status: 'success', url }]);
-              setViewingHistoryBatchId(null);
               setBulkRunId(null);
             }}
           />
         )}
 
-        {/* Images grid */}
-        {!bulkRunId && displayedImages.length > 0 && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 16, padding: 24 }}>
-            {displayedImages.map((image, index) => (
-              <div key={image.id} className="ws-img-card" style={{ position: 'relative' }}>
-                <div
-                  style={{ aspectRatio: '3/4', background: WS.surfHi, borderRadius: 8, overflow: 'hidden', position: 'relative', border: `1px solid ${selectedImageForEditIndex === index ? WS.gold : WS.border}`, cursor: image.status === 'success' ? 'pointer' : 'default', transition: 'border-color 0.15s' }}
-                  onClick={() => image.status === 'success' && setSelectedImageForEditIndex(index)}
-                >
-                  {image.url ? (
-                    <img src={image.url} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} alt="Generated" />
-                  ) : (
-                    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      {image.status === 'pending' && <span style={{ fontSize: 10, color: WS.txtSec }}>Pending…</span>}
-                      {(image.status === 'generating' || image.status === 'refining') && (
-                        <div style={{ width: 20, height: 20, border: `2px solid ${image.status === 'refining' ? WS.gold : WS.txtMid}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
-                      )}
-                      {image.status === 'failed' && <span style={{ fontSize: 10, color: '#E57373', textAlign: 'center', padding: '0 12px' }}>Failed</span>}
-                    </div>
-                  )}
-
-                  {/* Editing/regenerating overlay */}
-                  {image.url && (image.status === 'generating' || image.status === 'refining') && (
-                    <div style={{ position: 'absolute', inset: 0, background: 'rgba(10,9,8,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <div style={{ width: 22, height: 22, border: `2px solid ${WS.gold}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
-                    </div>
-                  )}
-
-                  {/* Failed overlay */}
-                  {image.status === 'failed' && (
-                    <div style={{ position: 'absolute', inset: 0, background: 'rgba(60,26,26,0.9)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 12, textAlign: 'center' }}>
-                      <p style={{ fontSize: 9, color: '#F2B8B5', marginBottom: 8, lineHeight: 1.5 }}>{image.errorMessage}</p>
-                      <button onClick={e => { e.stopPropagation(); handleRetryImage(index); }} style={{ padding: '4px 12px', background: '#F2B8B5', color: '#602020', border: 'none', borderRadius: 20, fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Retry</button>
-                    </div>
-                  )}
-                </div>
-
-                <div style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 2px' }}>
-                  <span style={{ fontSize: 9, color: WS.txtSec, fontVariantNumeric: 'tabular-nums' }}>IMG_{String(index + 1).padStart(2, '0')}</span>
-                  {image.generationTime && (
-                    <span style={{ fontSize: 9, color: WS.txtSec }}>{(image.generationTime / 1000).toFixed(1)}s</span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+        {/* ── History canvas (all runs as SKU cards) ── */}
+        {activeProject && !bulkRunId && !isLoadingProject && (
+          <HistoryCanvas
+            liveImages={liveGenerationImages}
+            isLive={isLoading}
+            liveLabel={activeGenerationMeta ? selectedModel.replace(/_/g, ' ') : undefined}
+            batches={projectHistory}
+            onSelectImage={(image, index, isLiveImg) => setSelectedImageForEdit({ image, index, isLive: isLiveImg })}
+            onDownloadImage={handleDownloadImage}
+            onDownloadBatch={handleDownloadSKU}
+            onRetryLiveShot={handleRetryImage}
+            onClearHistory={handleClearHistory}
+          />
         )}
       </main>
 
@@ -1898,15 +1722,15 @@ function App() {
       )}
 
       {/* Image edit panel */}
-      {selectedImageForEditIndex !== null && displayedImages[selectedImageForEditIndex] && (
+      {selectedImageForEdit && (
         <ImageEditPanel
-          image={displayedImages[selectedImageForEditIndex]}
-          imageIndex={selectedImageForEditIndex}
+          image={selectedImageForEdit.image}
+          imageIndex={selectedImageForEdit.index}
           uploadedFiles={uploadedFiles}
-          filename={`Shot_${String(selectedImageForEditIndex + 1).padStart(2, '0')}.jpg`}
-          onClose={() => setSelectedImageForEditIndex(null)}
-          onRegenerate={handleRetryImage}
-          onApplyEdit={handlePanelApplyEdit}
+          filename={`Shot_${String(selectedImageForEdit.index + 1).padStart(2, '0')}.jpg`}
+          onClose={() => setSelectedImageForEdit(null)}
+          onRegenerate={selectedImageForEdit.isLive ? handleRetryImage : (() => {})}
+          onApplyEdit={selectedImageForEdit.isLive ? handlePanelApplyEdit : (() => {})}
           onApplyColorGrading={handlePanelApplyColorGrading}
           onDownload={handleDownloadImage}
         />
