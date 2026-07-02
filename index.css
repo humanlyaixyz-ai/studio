@@ -1,0 +1,113 @@
+/* ============================================================
+   OVARLY — Design Tokens & Base
+   Brand: #156EF4  ·  Black: #080808  ·  White: #FFFFFF
+   Light, studio-grade base. All screens consume these tokens
+   so incoming design code can be dropped in without hunting hex.
+   ============================================================ */
+
+:root {
+  /* ---- Brand ---- */
+  --brand:        #156EF4;
+  --brand-hover:  #0F58CC;
+  --brand-active: #0B47A6;
+  --brand-weak:   #E9F1FE;   /* tint bg for selected/hover */
+  --brand-ring:   rgba(21, 110, 244, 0.35);
+
+  --black: #080808;
+  --white: #FFFFFF;
+
+  /* ---- Neutral scale ---- */
+  --n-0:   #FFFFFF;
+  --n-25:  #FBFCFD;
+  --n-50:  #F6F8FA;
+  --n-100: #EEF1F4;
+  --n-150: #E6EAEF;
+  --n-200: #DCE1E8;
+  --n-300: #C6CDD6;
+  --n-400: #9AA3B0;
+  --n-500: #6C7683;
+  --n-600: #4B535E;
+  --n-700: #333A43;
+  --n-800: #1E2329;
+  --n-900: #12161A;
+
+  /* ---- Semantic surfaces ---- */
+  --bg:          var(--n-50);
+  --surface:     var(--white);
+  --surface-2:   var(--n-50);
+  --surface-3:   var(--n-100);
+  --sidebar-bg:  var(--white);
+  --header-bg:   var(--white);
+
+  /* ---- Text ---- */
+  --text:    var(--black);
+  --text-2:  var(--n-600);
+  --text-3:  var(--n-500);
+  --text-4:  var(--n-400);
+  --text-on-brand: var(--white);
+
+  /* ---- Borders ---- */
+  --border:        var(--n-200);
+  --border-strong: var(--n-300);
+  --border-weak:   var(--n-150);
+
+  /* ---- Status ---- */
+  --success: #1F9D55;
+  --warning: #C77700;
+  --danger:  #D64545;
+  --success-weak: #E7F5EC;
+  --warning-weak: #FBF0DD;
+  --danger-weak:  #FBE9E9;
+
+  /* ---- Radius ---- */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-pill: 999px;
+
+  /* ---- Shadows ---- */
+  --shadow-sm: 0 1px 2px rgba(8, 8, 8, 0.06);
+  --shadow-md: 0 4px 12px rgba(8, 8, 8, 0.08);
+  --shadow-lg: 0 12px 32px rgba(8, 8, 8, 0.12);
+
+  /* ---- Layout ---- */
+  --sidebar-w: 240px;
+  --header-h:  60px;
+  --content-pad: 24px;
+
+  /* ---- Type ---- */
+  --font: 'Inter', system-ui, -apple-system, sans-serif;
+
+  /* ---- Motion ---- */
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --dur: 0.16s;
+}
+
+/* Override the dark defaults set inline in index.html */
+html, body {
+  background-color: var(--bg) !important;
+  color: var(--text) !important;
+  font-family: var(--font);
+  margin: 0;
+  padding: 0;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+#root { min-height: 100vh; }
+
+a { color: inherit; text-decoration: none; }
+
+button { font-family: inherit; }
+
+/* Light scrollbars to match the new base */
+.ov-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.ov-scroll::-webkit-scrollbar-track { background: transparent; }
+.ov-scroll::-webkit-scrollbar-thumb { background: var(--n-300); border-radius: var(--r-pill); border: 2px solid var(--bg); }
+.ov-scroll::-webkit-scrollbar-thumb:hover { background: var(--n-400); }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}
