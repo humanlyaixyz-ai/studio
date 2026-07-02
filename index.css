@@ -1,113 +1,73 @@
+@import "tailwindcss";
+
 /* ============================================================
-   OVARLY — Design Tokens & Base
-   Brand: #156EF4  ·  Black: #080808  ·  White: #FFFFFF
-   Light, studio-grade base. All screens consume these tokens
-   so incoming design code can be dropped in without hunting hex.
+   OVARLY — hi-fi light theme tokens (Tailwind v4 @theme)
+   Brand #156EF4 · Black #080808 · White #FFFFFF
+   Token names mirror the lo-fi wireframes (wire-*) so wireframe
+   markup ports directly; values are the hi-fi light palette.
+   Color is layered on top via the brand-* tokens.
    ============================================================ */
 
-:root {
-  /* ---- Brand ---- */
-  --brand:        #156EF4;
-  --brand-hover:  #0F58CC;
-  --brand-active: #0B47A6;
-  --brand-weak:   #E9F1FE;   /* tint bg for selected/hover */
-  --brand-ring:   rgba(21, 110, 244, 0.35);
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
 
-  --black: #080808;
-  --white: #FFFFFF;
+  /* Brand */
+  --color-brand: #156EF4;
+  --color-brand-hover: #0F58CC;
+  --color-brand-active: #0B47A6;
+  --color-brand-weak: #E9F1FE;      /* selected/hover tint bg */
+  --color-brand-weak-2: #DCE9FD;
 
-  /* ---- Neutral scale ---- */
-  --n-0:   #FFFFFF;
-  --n-25:  #FBFCFD;
-  --n-50:  #F6F8FA;
-  --n-100: #EEF1F4;
-  --n-150: #E6EAEF;
-  --n-200: #DCE1E8;
-  --n-300: #C6CDD6;
-  --n-400: #9AA3B0;
-  --n-500: #6C7683;
-  --n-600: #4B535E;
-  --n-700: #333A43;
-  --n-800: #1E2329;
-  --n-900: #12161A;
+  /* Wireframe-compatible semantic tokens (hi-fi light values) */
+  --color-wire-bg: #F6F8FA;         /* page background */
+  --color-wire-bg-2: #EEF1F5;       /* insets / subtle fills */
+  --color-wire-surface: #FFFFFF;    /* cards / panels */
+  --color-wire-border: #E4E8EE;     /* hairline borders */
+  --color-wire-border-strong: #CDD3DC;
+  --color-wire-text: #0B0B0C;       /* primary ink (≈ black) */
+  --color-wire-muted: #6B7280;      /* secondary text */
+  --color-wire-faint: #98A1AD;      /* tertiary text */
+  --color-wire-accent: #156EF4;     /* == brand */
 
-  /* ---- Semantic surfaces ---- */
-  --bg:          var(--n-50);
-  --surface:     var(--white);
-  --surface-2:   var(--n-50);
-  --surface-3:   var(--n-100);
-  --sidebar-bg:  var(--white);
-  --header-bg:   var(--white);
+  /* Status */
+  --color-ok: #1F9D55;
+  --color-ok-weak: #E7F5EC;
+  --color-warn: #C77700;
+  --color-warn-weak: #FBF0DD;
+  --color-danger: #D64545;
+  --color-danger-weak: #FBE9E9;
 
-  /* ---- Text ---- */
-  --text:    var(--black);
-  --text-2:  var(--n-600);
-  --text-3:  var(--n-500);
-  --text-4:  var(--n-400);
-  --text-on-brand: var(--white);
+  /* Radius scale */
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
 
-  /* ---- Borders ---- */
-  --border:        var(--n-200);
-  --border-strong: var(--n-300);
-  --border-weak:   var(--n-150);
-
-  /* ---- Status ---- */
-  --success: #1F9D55;
-  --warning: #C77700;
-  --danger:  #D64545;
-  --success-weak: #E7F5EC;
-  --warning-weak: #FBF0DD;
-  --danger-weak:  #FBE9E9;
-
-  /* ---- Radius ---- */
-  --r-xs: 4px;
-  --r-sm: 6px;
-  --r-md: 8px;
-  --r-lg: 12px;
-  --r-xl: 16px;
-  --r-pill: 999px;
-
-  /* ---- Shadows ---- */
-  --shadow-sm: 0 1px 2px rgba(8, 8, 8, 0.06);
-  --shadow-md: 0 4px 12px rgba(8, 8, 8, 0.08);
-  --shadow-lg: 0 12px 32px rgba(8, 8, 8, 0.12);
-
-  /* ---- Layout ---- */
-  --sidebar-w: 240px;
-  --header-h:  60px;
-  --content-pad: 24px;
-
-  /* ---- Type ---- */
-  --font: 'Inter', system-ui, -apple-system, sans-serif;
-
-  /* ---- Motion ---- */
-  --ease: cubic-bezier(0.2, 0, 0, 1);
-  --dur: 0.16s;
+  /* Shadows */
+  --shadow-card: 0 1px 2px rgba(8, 8, 8, 0.05), 0 1px 3px rgba(8, 8, 8, 0.04);
+  --shadow-pop: 0 8px 28px rgba(8, 8, 8, 0.12);
 }
 
-/* Override the dark defaults set inline in index.html */
+* { box-sizing: border-box; }
+
 html, body {
-  background-color: var(--bg) !important;
-  color: var(--text) !important;
-  font-family: var(--font);
   margin: 0;
-  padding: 0;
+  min-height: 100vh;
+  font-family: var(--font-sans);
+  background: var(--color-wire-bg);
+  color: var(--color-wire-text);
+  -webkit-font-smoothing: antialiased;
 }
-
-*, *::before, *::after { box-sizing: border-box; }
 
 #root { min-height: 100vh; }
 
 a { color: inherit; text-decoration: none; }
 
-button { font-family: inherit; }
-
-/* Light scrollbars to match the new base */
+/* Light scrollbars */
 .ov-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
 .ov-scroll::-webkit-scrollbar-track { background: transparent; }
-.ov-scroll::-webkit-scrollbar-thumb { background: var(--n-300); border-radius: var(--r-pill); border: 2px solid var(--bg); }
-.ov-scroll::-webkit-scrollbar-thumb:hover { background: var(--n-400); }
+.ov-scroll::-webkit-scrollbar-thumb { background: #C6CDD6; border-radius: 999px; border: 2px solid var(--color-wire-bg); }
+.ov-scroll::-webkit-scrollbar-thumb:hover { background: #A6ADB8; }
 
 @media (prefers-reduced-motion: reduce) {
-  * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
 }

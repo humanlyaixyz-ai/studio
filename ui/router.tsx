@@ -3,6 +3,7 @@ import { createBrowserRouter, Navigate } from 'react-router-dom';
 import AppShell from './AppShell';
 import WorkspaceShell from './WorkspaceShell';
 import Placeholder from './Placeholder';
+import Dashboard from './screens/Dashboard';
 import { ROUTES } from './routes';
 
 const P = (name: string, note?: string) => <Placeholder name={name} note={note} />;
@@ -14,7 +15,7 @@ export const router = createBrowserRouter([
   {
     element: <AppShell />,
     children: [
-      { path: ROUTES.dashboard,         element: P('Dashboard') },
+      { path: ROUTES.dashboard,         element: <Dashboard /> },
       { path: ROUTES.projects,          element: P('Projects') },
       { path: ROUTES.lookLibrary,       element: P('Look Library') },
       { path: ROUTES.lookLibraryEmpty,  element: P('Look Library — Empty') },

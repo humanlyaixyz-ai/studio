@@ -1,78 +1,55 @@
-import React from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { NavLink, Outlet } from 'react-router-dom';
 import { ROUTES } from './routes';
 
-/* Project workspace shell (inside a project): multi-project tab bar
-   header + left project menu (free toggle) + content. Scaffold only —
-   refined per design code. Prerequisite gating is shown at the SCREEN
-   level (locked states), never by hiding the menu. */
+/* Project workspace shell (inside a project): multi-project tab bar + left
+   project menu (free toggle) + content. Scaffold — refined as workspace
+   screens are ported. Prerequisite gating shows at the SCREEN level. */
 
 const PROJECT_MENU = [
   { to: ROUTES.projectOverview, label: 'Overview' },
-  { to: ROUTES.serviceSetup,    label: 'Service Setup' },
-  { to: ROUTES.addSku,          label: 'Add SKU' },
-  { to: ROUTES.addSkuStored,    label: 'SKUs' },
-  { to: ROUTES.propsAssets,     label: 'Props & Assets' },
-  { to: ROUTES.generationCanvas,label: 'Generation' },
-  { to: ROUTES.output,          label: 'Output' },
-  { to: ROUTES.review,          label: 'Review' },
+  { to: ROUTES.serviceSetup, label: 'Service Setup' },
+  { to: ROUTES.addSku, label: 'Add SKU' },
+  { to: ROUTES.addSkuStored, label: 'SKUs' },
+  { to: ROUTES.propsAssets, label: 'Props & Assets' },
+  { to: ROUTES.generationCanvas, label: 'Generation' },
+  { to: ROUTES.output, label: 'Output' },
+  { to: ROUTES.review, label: 'Review' },
 ];
 
 export default function WorkspaceShell() {
   return (
-    <div style={s.root}>
-      {/* Multi-project tab bar */}
-      <div style={s.tabBar}>
-        <div style={s.tab}>
-          <span style={s.tabDot} />
-          <span>Untitled Project</span>
-          <button style={s.tabClose} aria-label="Close tab">✕</button>
+    <div className="flex h-full flex-col bg-wire-bg">
+      {/* multi-project tab bar */}
+      <div className="flex h-11 shrink-0 items-end gap-1.5 border-b border-wire-border bg-wire-bg-2 px-4">
+        <div className="flex items-center gap-2 rounded-t-md border border-b-0 border-wire-border bg-wire-surface px-3 py-2 text-sm font-semibold text-wire-text">
+          <span className="h-1.5 w-1.5 rounded-full bg-brand" />
+          Untitled Project
+          <button className="ml-1 text-wire-faint hover:text-wire-text" aria-label="Close tab">✕</button>
         </div>
-        <NavLink to={ROUTES.dashboard} style={s.tabAdd}>+ Dashboard</NavLink>
+        <NavLink to={ROUTES.dashboard} className="px-2.5 py-2 text-xs text-wire-muted hover:text-wire-text">+ Dashboard</NavLink>
       </div>
 
-      <div style={s.body}>
-        {/* Left project menu */}
-        <aside style={s.menu} className="ov-scroll">
-          {PROJECT_MENU.map(item => (
-            <NavLink key={item.to} to={item.to} style={({ isActive }) => ({
-              ...s.menuItem, ...(isActive ? s.menuItemActive : null),
-            })}>{item.label}</NavLink>
+      <div className="flex min-h-0 flex-1">
+        {/* left project menu */}
+        <aside className="flex w-52 shrink-0 flex-col gap-1 overflow-y-auto border-r border-wire-border bg-wire-surface p-3 ov-scroll">
+          {PROJECT_MENU.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) => [
+                'rounded-md px-3 py-2 text-sm transition-colors',
+                isActive ? 'bg-brand-weak font-semibold text-brand' : 'font-medium text-wire-muted hover:bg-wire-bg hover:text-wire-text',
+              ].join(' ')}
+            >
+              {item.label}
+            </NavLink>
           ))}
         </aside>
 
-        {/* Screen content */}
-        <main style={s.content} className="ov-scroll">
+        <main className="min-w-0 flex-1 overflow-y-auto p-6 ov-scroll">
           <Outlet />
         </main>
       </div>
     </div>
   );
 }
-
-const s: Record<string, React.CSSProperties> = {
-  root: { display: 'flex', flexDirection: 'column', minHeight: '100vh', background: 'var(--bg)' },
-  tabBar: {
-    height: 44, flexShrink: 0, display: 'flex', alignItems: 'flex-end', gap: 6, padding: '0 16px',
-    background: 'var(--surface-2)', borderBottom: '1px solid var(--border)',
-  },
-  tab: {
-    display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', fontSize: 13, fontWeight: 600,
-    color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border)', borderBottom: 'none',
-    borderRadius: 'var(--r-md) var(--r-md) 0 0',
-  },
-  tabDot: { width: 7, height: 7, borderRadius: '50%', background: 'var(--brand)' },
-  tabClose: { border: 'none', background: 'transparent', color: 'var(--text-4)', cursor: 'pointer', fontSize: 12, padding: 0, marginLeft: 4 },
-  tabAdd: { fontSize: 12, color: 'var(--text-3)', padding: '8px 10px', cursor: 'pointer' },
-
-  body: { flex: 1, display: 'flex', minHeight: 0 },
-  menu: {
-    width: 200, flexShrink: 0, padding: 12, background: 'var(--surface)', borderRight: '1px solid var(--border)',
-    display: 'flex', flexDirection: 'column', gap: 2, overflowY: 'auto',
-  },
-  menuItem: {
-    padding: '9px 12px', borderRadius: 'var(--r-md)', fontSize: 13, fontWeight: 500, color: 'var(--text-2)', cursor: 'pointer',
-  },
-  menuItemActive: { background: 'var(--brand-weak)', color: 'var(--brand)', fontWeight: 600 },
-  content: { flex: 1, overflowY: 'auto', padding: 'var(--content-pad)', minWidth: 0 },
-};
