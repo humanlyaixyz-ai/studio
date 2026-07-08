@@ -63,6 +63,19 @@ export async function loadProjects(): Promise<Project[]> {
   return (data || []).map(rowToProject);
 }
 
+export async function loadSkuCounts(): Promise<Record<string, number>> {
+  // Single lightweight query — pull just project_id for every SKU and tally client-side,
+  // so the Projects/Dashboard lists can show real SKU counts without N per-project queries.
+  const { data, error } = await supabase.from('skus').select('project_id');
+  if (error) { console.error('[db] loadSkuCounts:', error.message); return {}; }
+  const counts: Record<string, number> = {};
+  for (const row of data || []) {
+    const pid = (row as { project_id: string }).project_id;
+    if (pid) counts[pid] = (counts[pid] || 0) + 1;
+  }
+  return counts;
+}
+
 export async function saveProject(project: Project): Promise<void> {
   const { error } = await supabase.from('projects').upsert({
     id:              project.id,
@@ -189,6 +202,31 @@ export async function loadProjectAssets(projectId: string): Promise<ProjectAsset
   return assets;
 }
 
+export interface AssetSummary {
+  id: string;
+  slotKey: string;
+  url: string; // public URL (project-assets bucket is public-read)
+}
+
+// Lightweight read-only loader for the Props & Assets gallery — asset rows + a public
+// thumbnail URL per asset, WITHOUT downloading the image bytes (unlike loadProjectAssets).
+export async function loadProjectAssetSummaries(projectId: string): Promise<AssetSummary[]> {
+  const { data: rows, error } = await supabase
+    .from('project_assets')
+    .select('id, slot_key, storage_path')
+    .eq('project_id', projectId);
+
+  if (error) { console.error('[db] loadProjectAssetSummaries:', error.message); return []; }
+
+  return (rows || [])
+    .filter((r) => r.storage_path)
+    .map((r) => ({
+      id: r.id,
+      slotKey: r.slot_key,
+      url: publicUrl('project-assets', r.storage_path),
+    }));
+}
+
 // ── Generation Batches ────────────────────────────────────────────────────────
 
 export async function saveGenerationBatch(batch: GenerationBatch): Promise<void> {
@@ -274,6 +312,60 @@ export async function loadProjectBatches(projectId: string): Promise<GenerationB
 }
 
 // ── SKUs ──────────────────────────────────────────────────────────────────────
+
+export interface SkuSummary {
+  id: string;
+  name: string;
+  skuCode?: string;
+  createdAt: number;
+  slotKeys: string[];
+  thumbUrl?: string; // public URL of a representative image (front preferred)
+}
+
+// Lightweight list loader — SKU rows + their asset slot_keys and a thumbnail URL,
+// WITHOUT downloading the image bytes (unlike loadProjectSKUs). SKU assets live in the
+// public-read "project-assets" bucket, so a public URL renders directly.
+export async function loadSkuSummaries(projectId: string): Promise<SkuSummary[]> {
+  const { data: skuRows, error } = await supabase
+    .from('skus')
+    .select('id, name, sku_code, created_at')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: true });
+
+  if (error) { console.error('[db] loadSkuSummaries:', error.message); return []; }
+  if (!skuRows?.length) return [];
+
+  const ids = skuRows.map((r) => r.id);
+  const { data: assetRows, error: aErr } = await supabase
+    .from('sku_assets')
+    .select('sku_id, slot_key, storage_path')
+    .in('sku_id', ids);
+  if (aErr) console.error('[db] loadSkuSummaries assets:', aErr.message);
+
+  const bySku: Record<string, { slotKeys: string[]; front?: string; any?: string }> = {};
+  for (const a of assetRows || []) {
+    const row = a as { sku_id: string; slot_key: string; storage_path: string };
+    const entry = (bySku[row.sku_id] ||= { slotKeys: [] });
+    entry.slotKeys.push(row.slot_key);
+    if (row.storage_path) {
+      entry.any ??= row.storage_path;
+      if (/front/i.test(row.slot_key)) entry.front ??= row.storage_path;
+    }
+  }
+
+  return skuRows.map((r) => {
+    const entry = bySku[r.id];
+    const thumbPath = entry?.front || entry?.any;
+    return {
+      id: r.id,
+      name: r.name,
+      skuCode: r.sku_code || undefined,
+      createdAt: r.created_at,
+      slotKeys: entry?.slotKeys || [],
+      thumbUrl: thumbPath ? publicUrl('project-assets', thumbPath) : undefined,
+    };
+  });
+}
 
 export async function loadProjectSKUs(projectId: string): Promise<SKU[]> {
   const { data: skuRows, error } = await supabase

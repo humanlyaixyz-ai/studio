@@ -77,8 +77,12 @@ export default function AttachLook() {
   const navigate = useNavigate();
   const [filter, setFilter] = useState(SERVICE_TYPE);
   const [selected, setSelected] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
 
-  const list = filter === 'All' ? LOOKS : LOOKS.filter((l) => l.type === filter);
+  const q = query.trim().toLowerCase();
+  const list = LOOKS
+    .filter((l) => (filter === 'All' ? true : l.type === filter))
+    .filter((l) => (q ? l.name.toLowerCase().includes(q) : true));
   const close = () => navigate(ROUTES.serviceSetup);
   const createNew = () => navigate(ROUTES.lookEditor);
   const attach = () => navigate(ROUTES.serviceSetup);
@@ -111,10 +115,16 @@ export default function AttachLook() {
 
         {/* toolbar */}
         <div className="flex items-center justify-between border-b border-wire-border px-6 py-3">
-          <div className="flex h-9 w-72 items-center gap-2 rounded-md border border-wire-border bg-wire-bg px-3 text-wire-muted">
+          <label className="flex h-9 w-72 items-center gap-2 rounded-md border border-wire-border bg-wire-bg px-3 text-wire-muted focus-within:border-brand">
             {icon('M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3', 16)}
-            <span className="text-sm">Search Looks…</span>
-          </div>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="w-full bg-transparent text-sm text-wire-text outline-none placeholder:text-wire-muted"
+              placeholder="Search Looks…"
+            />
+            {query ? <button type="button" onClick={() => setQuery('')} aria-label="Clear search" className="text-wire-faint hover:text-wire-text">✕</button> : null}
+          </label>
           <div className="flex items-center gap-2">
             {FILTERS.map((f) => (
               <button

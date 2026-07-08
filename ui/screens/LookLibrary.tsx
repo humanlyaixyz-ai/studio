@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '../routes';
 import { Button } from '../kit';
@@ -38,18 +39,12 @@ const LOOKS: Look[] = [
   { name: 'Feed Ready', type: 'Social Media', refs: 4, bg: 'Studio', tags: ['Bright', 'Punchy'], used: 1 },
 ];
 
-function Chip({ children, active = false }: { children: string; active?: boolean }) {
-  return (
-    <span
-      className={[
-        'cursor-pointer rounded-full border px-3 py-1 text-xs font-medium',
-        active ? 'border-brand-weak-2 bg-brand-weak text-brand' : 'border-wire-border bg-wire-surface text-wire-muted hover:border-wire-border-strong hover:text-wire-text',
-      ].join(' ')}
-    >
-      {children}
-    </span>
-  );
-}
+type SortKey = 'recent' | 'name' | 'used';
+const SORTS: { key: SortKey; label: string }[] = [
+  { key: 'recent', label: 'Recent' },
+  { key: 'name', label: 'Name (A–Z)' },
+  { key: 'used', label: 'Most used' },
+];
 
 function LookCard({ look, onOpen }: { look: Look; onOpen?: () => void }) {
   return (
@@ -71,7 +66,7 @@ function LookCard({ look, onOpen }: { look: Look; onOpen?: () => void }) {
         </div>
       </div>
       {/* body */}
-      <div className="p-3">
+      <div onClick={onOpen} className="cursor-pointer p-3">
         <div className="flex items-center justify-between gap-2">
           <p className="truncate text-sm font-semibold text-wire-text">{look.name}</p>
           <span className="shrink-0 rounded-full border border-brand-weak-2 bg-brand-weak px-2 py-0.5 text-[10px] font-medium text-brand">{look.type}</span>
@@ -85,6 +80,19 @@ function LookCard({ look, onOpen }: { look: Look; onOpen?: () => void }) {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+function LookRow({ look, onOpen }: { look: Look; onOpen?: () => void }) {
+  return (
+    <div onClick={onOpen} className="flex cursor-pointer items-center gap-4 rounded-lg border border-wire-border bg-wire-surface px-4 py-3 transition-all hover:border-wire-border-strong hover:shadow-card">
+      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-md bg-gradient-to-br from-wire-bg-2 to-wire-bg text-[10px] text-wire-faint">Look</div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-semibold text-wire-text">{look.name}</p>
+        <p className="mt-0.5 text-xs text-wire-muted">{look.refs} references · {look.bg} · {look.used > 0 ? `Used in ${look.used}` : 'Not used yet'}</p>
+      </div>
+      <span className="shrink-0 rounded-full border border-brand-weak-2 bg-brand-weak px-2 py-0.5 text-[10px] font-medium text-brand">{look.type}</span>
     </div>
   );
 }
@@ -107,8 +115,26 @@ function LookLibraryBase({ empty }: { empty: boolean }) {
   const navigate = useNavigate();
   const openEditor = () => navigate(ROUTES.lookEditor);
 
+  const [query, setQuery] = useState('');
+  const [type, setType] = useState('All');
+  const [sort, setSort] = useState<SortKey>('recent');
+  const [sortOpen, setSortOpen] = useState(false);
+  const [view, setView] = useState<'grid' | 'list'>('grid');
+
+  const list = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let out = LOOKS.filter((l) => type === 'All' || l.type === type);
+    if (q) out = out.filter((l) => l.name.toLowerCase().includes(q) || l.tags.some((t) => t.toLowerCase().includes(q)));
+    out = [...out].sort((a, b) => {
+      if (sort === 'name') return a.name.localeCompare(b.name);
+      if (sort === 'used') return b.used - a.used;
+      return 0;
+    });
+    return out;
+  }, [query, type, sort]);
+
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6" onClick={() => setSortOpen(false)}>
       <PageHeading onNew={openEditor} />
 
       {empty ? (
@@ -130,31 +156,67 @@ function LookLibraryBase({ empty }: { empty: boolean }) {
           <div className="flex items-center justify-between">
             <label className="flex h-9 w-80 items-center gap-2 rounded-md border border-wire-border bg-wire-surface px-3 focus-within:border-brand">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="text-wire-faint" aria-hidden><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.3-4.3" strokeLinecap="round" /></svg>
-              <input className="w-full bg-transparent text-sm text-wire-text outline-none placeholder:text-wire-muted" placeholder="Search Looks…" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="w-full bg-transparent text-sm text-wire-text outline-none placeholder:text-wire-muted"
+                placeholder="Search Looks…"
+              />
+              {query ? <button type="button" onClick={() => setQuery('')} aria-label="Clear search" className="text-wire-faint hover:text-wire-text">✕</button> : null}
             </label>
             <div className="flex items-center gap-2">
-              <Button variant="secondary" size="sm">Sort: Recent ▾</Button>
+              <div className="relative" onClick={(e) => e.stopPropagation()}>
+                <Button variant="secondary" size="sm" onClick={() => setSortOpen((v) => !v)}>Sort: {SORTS.find((s) => s.key === sort)!.label} ▾</Button>
+                {sortOpen ? (
+                  <div className="absolute right-0 top-9 z-20 w-44 rounded-md border border-wire-border bg-wire-surface py-1 shadow-pop">
+                    {SORTS.map((s) => (
+                      <button key={s.key} type="button" onClick={() => { setSort(s.key); setSortOpen(false); }} className={['block w-full px-3 py-2 text-left text-sm hover:bg-wire-bg', sort === s.key ? 'font-semibold text-brand' : 'text-wire-text'].join(' ')}>{s.label}</button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               <div className="flex overflow-hidden rounded-md border border-wire-border">
-                <span className="border-r border-wire-border bg-brand-weak px-2 py-1.5 text-brand">{sic(GRID)}</span>
-                <span className="px-2 py-1.5 text-wire-muted">{sic(LIST)}</span>
+                <button type="button" onClick={() => setView('grid')} aria-label="Grid view" aria-pressed={view === 'grid'} className={['border-r border-wire-border px-2 py-1.5', view === 'grid' ? 'bg-brand-weak text-brand' : 'text-wire-muted hover:bg-wire-bg'].join(' ')}>{sic(GRID)}</button>
+                <button type="button" onClick={() => setView('list')} aria-label="List view" aria-pressed={view === 'list'} className={['px-2 py-1.5', view === 'list' ? 'bg-brand-weak text-brand' : 'text-wire-muted hover:bg-wire-bg'].join(' ')}>{sic(LIST)}</button>
               </div>
             </div>
           </div>
 
           {/* Service Type filter chips */}
           <div className="flex flex-wrap items-center gap-2">
-            {SERVICE_TYPES.map((s, i) => (
-              <Chip key={s} active={i === 0}>{s}</Chip>
+            {SERVICE_TYPES.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setType(s)}
+                className={['rounded-full border px-3 py-1 text-xs font-medium', type === s ? 'border-brand-weak-2 bg-brand-weak text-brand' : 'border-wire-border bg-wire-surface text-wire-muted hover:border-wire-border-strong hover:text-wire-text'].join(' ')}
+              >
+                {s}
+              </button>
             ))}
-            <span className="ml-1 cursor-pointer rounded-full border border-dashed border-wire-border px-3 py-1 text-xs text-wire-muted hover:text-wire-text">Tags ▾</span>
           </div>
 
-          {/* grid */}
-          <div className="grid grid-cols-3 gap-4">
-            {LOOKS.map((l) => (
-              <LookCard key={l.name} look={l} onOpen={openEditor} />
-            ))}
-          </div>
+          {/* grid / list / empty */}
+          {list.length > 0 ? (
+            view === 'grid' ? (
+              <div className="grid grid-cols-3 gap-4">
+                {list.map((l) => <LookCard key={l.name} look={l} onOpen={openEditor} />)}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {list.map((l) => <LookRow key={l.name} look={l} onOpen={openEditor} />)}
+              </div>
+            )
+          ) : (
+            <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-wire-border bg-wire-surface px-6 py-16 text-center">
+              <p className="text-base font-semibold text-wire-text">No matching Looks</p>
+              <p className="text-sm text-wire-muted">Try a different search or Service Type filter.</p>
+              <div className="mt-2 flex gap-2">
+                {query ? <Button variant="secondary" size="sm" onClick={() => setQuery('')}>Clear search</Button> : null}
+                {type !== 'All' ? <Button variant="secondary" size="sm" onClick={() => setType('All')}>All types</Button> : null}
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

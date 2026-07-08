@@ -102,6 +102,8 @@ export default function PrepareSku() {
   const [doTag, setDoTag] = useState(true);
   const [doGroup, setDoGroup] = useState(true);
   const [reviewApplied, setReviewApplied] = useState(false);
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<'All' | 'Needs attention'>('All');
 
   const close = () => navigate(ROUTES.addSkuStored);
   const saveValidate = () => navigate(ROUTES.skuReview);
@@ -112,6 +114,13 @@ export default function PrepareSku() {
   const readyCount = GROUPS.filter((g) => missingOf(g).length === 0).length;
   const attentionCount = GROUPS.length - readyCount;
   const applyAuto = () => { setAutoPrepared(true); setAutoOpen(false); };
+
+  const q = query.trim().toLowerCase();
+  const shownGroups = GROUPS.filter((g) => {
+    if (q && !g.code.toLowerCase().includes(q)) return false;
+    if (filter === 'Needs attention') return missingOf(g).length > 0;
+    return true;
+  });
 
   const Check = ({ on }: { on: boolean }) => (
     <span className={['grid h-4 w-4 shrink-0 place-items-center rounded border', on ? 'border-brand bg-brand text-white' : 'border-wire-border bg-wire-surface text-transparent'].join(' ')}>
@@ -134,13 +143,26 @@ export default function PrepareSku() {
         {/* top controls — search + filters + Auto prepare */}
         <div className="flex items-center justify-between border-b border-wire-border px-6 py-3">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-72 items-center gap-2 rounded-md border border-wire-border bg-wire-bg px-3">
+            <label className="flex h-9 w-72 items-center gap-2 rounded-md border border-wire-border bg-wire-bg px-3 focus-within:border-brand" onClick={(e) => e.stopPropagation()}>
               <span className="text-wire-muted">{ico('M11 19a8 8 0 100-16 8 8 0 000 16zM21 21l-4.3-4.3')}</span>
-              <span className="text-sm text-wire-muted">Search SKU by name or code</span>
-            </div>
-            <div className="flex items-center gap-2">
-              {['All', 'Needs attention'].map((f, i) => (
-                <span key={f} className={['cursor-pointer rounded-md border px-3 py-1.5 text-xs font-medium', i === 0 ? 'border-brand-weak-2 bg-brand-weak text-brand' : 'border-wire-border bg-wire-surface text-wire-muted hover:text-wire-text'].join(' ')}>{f}</span>
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="w-full bg-transparent text-sm text-wire-text outline-none placeholder:text-wire-muted"
+                placeholder="Search SKU by name or code"
+              />
+              {query ? <button type="button" onClick={() => setQuery('')} aria-label="Clear search" className="text-wire-faint hover:text-wire-text">✕</button> : null}
+            </label>
+            <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+              {(['All', 'Needs attention'] as const).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setFilter(f)}
+                  className={['rounded-md border px-3 py-1.5 text-xs font-medium', filter === f ? 'border-brand-weak-2 bg-brand-weak text-brand' : 'border-wire-border bg-wire-surface text-wire-muted hover:text-wire-text'].join(' ')}
+                >
+                  {f}
+                </button>
               ))}
             </div>
           </div>
@@ -236,7 +258,13 @@ export default function PrepareSku() {
               </div>
             ) : null}
 
-            {GROUPS.map((g) => {
+            {shownGroups.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-wire-border bg-wire-bg px-6 py-12 text-center text-sm text-wire-muted">
+                No SKUs match {query ? `“${query}”` : `“${filter}”`}.
+              </div>
+            ) : null}
+
+            {shownGroups.map((g) => {
               const missing = missingOf(g);
               const ready = missing.length === 0;
               return (

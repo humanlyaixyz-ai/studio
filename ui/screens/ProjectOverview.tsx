@@ -1,17 +1,40 @@
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '../routes';
 import { Button } from '../kit';
+import { useProjects, toVM } from '../data/projects';
 
 /**
  * ProjectOverview — hi-fi build of ProjectOverviewWireframe.
  * The project's home tab inside the workspace shell (Project menu · Overview).
- * Actions live top-right (no footer). The hub itself is next-update scope; body uses
- * the shared coming-soon pattern. Shell (tab bar + project menu) is provided by WorkspaceShell.
+ * Header reflects the real selected project (from useProjects). Actions live top-right
+ * (no footer). The hub body itself is next-update scope; uses the coming-soon pattern.
+ * Shell (tab bar + project menu) is provided by WorkspaceShell.
  */
 
 export default function ProjectOverview() {
   const navigate = useNavigate();
-  const setupDone = true; // generation is only offered once setup is complete
+  const { projects, skuCounts, archivedIds, selectedId, loading } = useProjects();
+  const [now] = useState(() => Date.now());
+
+  const project = useMemo(() => {
+    const row = projects.find((p) => p.id === selectedId);
+    return row ? toVM(row, skuCounts[row.id] ?? 0, archivedIds.has(row.id), now) : null;
+  }, [projects, selectedId, skuCounts, archivedIds, now]);
+
+  // No project in context (e.g. deep link / storage cleared) and nothing loading.
+  if (!project && !loading) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-wire-border bg-wire-surface px-6 py-20 text-center">
+        <p className="text-lg font-semibold text-wire-text">No project selected</p>
+        <p className="max-w-md text-sm text-wire-muted">Pick a project to see its overview.</p>
+        <div className="mt-2"><Button onClick={() => navigate(ROUTES.projects)}>Go to Projects</Button></div>
+      </div>
+    );
+  }
+
+  const setupDone = project?.setupDone ?? false;
+  const statusActive = project?.status !== 'draft';
 
   return (
     <div className="space-y-6">
@@ -37,12 +60,18 @@ export default function ProjectOverview() {
         <div className="h-20 w-28 shrink-0 rounded-md border border-wire-border bg-gradient-to-br from-wire-bg-2 to-wire-bg" aria-hidden />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <h2 className="text-xl font-semibold text-wire-text">Nike Summer Campaign</h2>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-transparent bg-ok-weak px-2 py-0.5 text-[11px] font-medium text-ok">
-              <span className="h-1.5 w-1.5 rounded-full bg-ok" /> Active
-            </span>
+            <h2 className="text-xl font-semibold text-wire-text">{project?.name ?? 'Loading…'}</h2>
+            {project ? (
+              <span className={['inline-flex items-center gap-1.5 rounded-full border border-transparent px-2 py-0.5 text-[11px] font-medium', statusActive ? 'bg-ok-weak text-ok' : 'bg-warn-weak text-warn'].join(' ')}>
+                <span className={['h-1.5 w-1.5 rounded-full', statusActive ? 'bg-ok' : 'bg-warn'].join(' ')} /> {statusActive ? 'Active' : 'Draft'}
+              </span>
+            ) : null}
           </div>
-          <p className="mt-1 text-sm text-wire-muted">24 SKUs · 3 Service Types · Last edited 2 hours ago</p>
+          <p className="mt-1 text-sm text-wire-muted">
+            {project
+              ? `${project.skus} SKU${project.skus === 1 ? '' : 's'} · ${project.services} Service Type${project.services === 1 ? '' : 's'} · Last edited ${project.edited}`
+              : 'Loading project…'}
+          </p>
         </div>
       </div>
 

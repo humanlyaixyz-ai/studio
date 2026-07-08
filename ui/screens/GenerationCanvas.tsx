@@ -116,6 +116,9 @@ export default function GenerationCanvas() {
   const navigate = useNavigate();
   const [panel, setPanel] = useState<'sku' | 'settings' | 'shot' | 'look' | null>(null);
   const [tab, setTab] = useState<Tab>('Inputs');
+  const [service, setService] = useState(SERVICE_TABS[0]);
+  const [shots, setShots] = useState(SHOTS);
+  const toggleShot = (name: string) => setShots((prev) => prev.map((s) => (s.name === name ? { ...s, selected: !s.selected } : s)));
   const [leftOpen, setLeftOpen] = useState(false);
   const [rail, setRail] = useState<string | null>(null);
   const [sel, setSel] = useState<Set<number>>(() => new Set());
@@ -192,7 +195,7 @@ export default function GenerationCanvas() {
         >
           <div className="mb-4">
             <p className="text-xs font-medium uppercase tracking-wide text-wire-muted">
-              E-Commerce · {count} SKUs · {totalOutputs} outputs
+              {service} · {count} SKUs · {totalOutputs} outputs
             </p>
             <p className="mt-1 text-[11px] text-wire-muted">
               Tap to select · ⌘/Ctrl-tap for multiple · double-tap to view · drag to box-select
@@ -281,27 +284,27 @@ export default function GenerationCanvas() {
 
       {/* ---------- Service Type switch (top) ---------- */}
       <div className="absolute left-1/2 top-4 z-10 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-wire-border bg-wire-surface p-1 shadow-pop">
-        {SERVICE_TABS.map((t, i) => (
-          <span key={t} className={['rounded-lg px-3 py-1.5 text-sm', i === 0 ? 'bg-brand-weak font-medium text-brand' : 'text-wire-muted'].join(' ')}>{t}</span>
+        {SERVICE_TABS.map((t) => (
+          <button key={t} type="button" onClick={() => setService(t)} className={['rounded-lg px-3 py-1.5 text-sm transition-colors', t === service ? 'bg-brand-weak font-medium text-brand' : 'text-wire-muted hover:text-wire-text'].join(' ')}>{t}</button>
         ))}
-        <span className="flex h-7 w-7 items-center justify-center rounded-lg text-wire-muted"><IconPlus size={16} /></span>
+        <button type="button" aria-label="Add service type" className="flex h-7 w-7 items-center justify-center rounded-lg text-wire-muted hover:text-brand"><IconPlus size={16} /></button>
       </div>
 
       {/* ---------- RIGHT RAIL — shot editor (full height) ---------- */}
       {leftOpen ? (
         <div className="absolute bottom-0 right-0 top-0 z-20 flex w-[340px] flex-col border-l border-wire-border bg-wire-surface shadow-pop">
           <div className="flex items-center justify-between border-b border-wire-border px-4 py-3">
-            <p className="text-sm font-semibold text-wire-text">Shot editor — E-Commerce</p>
+            <p className="text-sm font-semibold text-wire-text">Shot editor — {service}</p>
             <button type="button" onClick={() => setLeftOpen(false)} aria-label="Close" className="text-wire-muted hover:text-wire-text"><IconX /></button>
           </div>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 ov-scroll">
             <p className="text-[11px] font-medium uppercase tracking-wide text-wire-muted">Angles — add or remove</p>
-            {SHOTS.map((shot) => (
+            {shots.map((shot) => (
               <div key={shot.name} className={['rounded-lg border p-3', shot.selected ? 'border-brand bg-brand-weak' : 'border-wire-border bg-wire-surface'].join(' ')}>
-                <div className="flex items-center gap-2">
+                <button type="button" onClick={() => toggleShot(shot.name)} className="flex w-full items-center gap-2 text-left">
                   <span className={['flex h-4 w-4 items-center justify-center rounded border', shot.selected ? 'border-brand bg-brand text-white' : 'border-wire-border-strong bg-wire-surface text-transparent'].join(' ')}><IconCheck size={10} /></span>
                   <p className="text-sm font-medium text-wire-text">{shot.name}</p>
-                </div>
+                </button>
                 {shot.selected ? (
                   <div className="mt-2">
                     <p className="mb-1 text-[11px] font-medium text-wire-muted">Shot direction</p>
@@ -387,11 +390,11 @@ export default function GenerationCanvas() {
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto p-4 ov-scroll">
                   <div className="mb-3 flex items-center justify-between">
-                    <p className="text-sm text-wire-text">Shots to generate <span className="text-wire-muted">· {SHOTS.filter((s) => s.selected).length}</span></p>
+                    <p className="text-sm text-wire-text">Shots to generate <span className="text-wire-muted">· {shots.filter((s) => s.selected).length}</span></p>
                     <Button variant="secondary" size="sm" onClick={() => { setLeftOpen(true); setRail(null); setPanel(null); }}>Open shot editor →</Button>
                   </div>
                   <div className="space-y-3">
-                    {SHOTS.filter((s) => s.selected).map((s) => (
+                    {shots.filter((s) => s.selected).map((s) => (
                       <div key={s.name} className="rounded-lg border border-wire-border bg-wire-surface p-3">
                         <p className="mb-1.5 text-sm font-medium text-wire-text">{s.name}</p>
                         <textarea defaultValue={s.direction} rows={2} className="w-full resize-none rounded-md border border-wire-border bg-wire-bg p-2 text-xs text-wire-text focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand" />
@@ -599,7 +602,7 @@ export default function GenerationCanvas() {
             <div className="flex items-center justify-between border-b border-wire-border px-4 py-3">
               <div className="flex items-baseline gap-2">
                 <span className="text-sm font-semibold text-wire-text">{selectedSkus[modalSku].name}</span>
-                <span className="text-xs text-wire-muted">E-Commerce · {selectedSkus[modalSku].count} images</span>
+                <span className="text-xs text-wire-muted">{service} · {selectedSkus[modalSku].count} images</span>
               </div>
               <div className="flex items-center gap-2">
                 <Button variant="secondary" size="sm">

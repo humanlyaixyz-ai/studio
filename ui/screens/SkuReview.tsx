@@ -1,18 +1,29 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '../routes';
 import AddSku from './AddSku';
+import { useSkus } from '../data/skus';
 
 /**
  * SKU Upload — Processing state (hi-fi build of SkuReviewWireframe).
- * After upload, the system groups files by SKU. This loader shows over the Add SKU
- * screen, then advances to the SKU validation table (/add-sku-stored).
+ * Shows while the uploaded images are read + persisted as SKUs, then advances to the
+ * SKU validation table (/add-sku-stored) once the in-flight uploads settle.
  */
 
 export default function SkuReview() {
   const navigate = useNavigate();
+  const { uploading } = useSkus();
+  const started = useRef(false);
+
+  // Once we've seen uploads in flight and they've all settled, advance to the list.
   useEffect(() => {
-    const t = setTimeout(() => navigate(ROUTES.addSkuStored), 1800);
+    if (uploading > 0) started.current = true;
+    else if (started.current) navigate(ROUTES.addSkuStored);
+  }, [uploading, navigate]);
+
+  // Safety net: never hang here (e.g. no files were picked).
+  useEffect(() => {
+    const t = setTimeout(() => navigate(ROUTES.addSkuStored), 8000);
     return () => clearTimeout(t);
   }, [navigate]);
 

@@ -29,11 +29,18 @@ const SECTIONS = ['General', 'Account', 'Workspace', 'Notifications', 'Privacy']
 
 /* ---------- shared bits ---------- */
 
-function Switch({ on }: { on: boolean }) {
+function Switch({ on: initial = false }: { on?: boolean }) {
+  const [on, setOn] = useState(initial);
   return (
-    <span className={['inline-flex h-5 w-9 items-center rounded-full px-0.5 transition-colors', on ? 'justify-end bg-brand' : 'justify-start bg-wire-border'].join(' ')}>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      onClick={() => setOn((v) => !v)}
+      className={['inline-flex h-5 w-9 items-center rounded-full px-0.5 transition-colors', on ? 'justify-end bg-brand' : 'justify-start bg-wire-border'].join(' ')}
+    >
       <span className="h-4 w-4 rounded-full bg-white shadow-card" />
-    </span>
+    </button>
   );
 }
 
@@ -86,12 +93,20 @@ function ToggleRow({ title, desc, on }: { title: string; desc: string; on: boole
 /* ---------- sections ---------- */
 
 function General() {
+  const [appearance, setAppearance] = useState('System');
   return (
     <div className="space-y-5">
       <Card title="Appearance" desc="How OVARLY looks on this device.">
         <div className="inline-flex rounded-md border border-wire-border bg-wire-bg p-0.5">
           {['Light', 'Dark', 'System'].map((m) => (
-            <span key={m} className={['rounded px-4 py-1.5 text-sm font-medium transition-colors', m === 'System' ? 'bg-brand text-white shadow-card' : 'text-wire-muted'].join(' ')}>{m}</span>
+            <button
+              key={m}
+              type="button"
+              onClick={() => setAppearance(m)}
+              className={['rounded px-4 py-1.5 text-sm font-medium transition-colors', m === appearance ? 'bg-brand text-white shadow-card' : 'text-wire-muted hover:text-wire-text'].join(' ')}
+            >
+              {m}
+            </button>
           ))}
         </div>
       </Card>
@@ -223,6 +238,8 @@ function Privacy() {
 export default function Settings() {
   const navigate = useNavigate();
   const [section, setSection] = useState('General');
+  const [query, setQuery] = useState('');
+  const shown = SECTIONS.filter((s) => s.toLowerCase().includes(query.trim().toLowerCase()));
   return (
     <div className="mx-auto flex max-w-6xl gap-6">
       {/* settings sub-nav */}
@@ -231,11 +248,17 @@ export default function Settings() {
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="text-wire-faint" aria-hidden>
             <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.3-4.3" strokeLinecap="round" />
           </svg>
-          <input className="w-full bg-transparent text-sm text-wire-text outline-none placeholder:text-wire-muted" placeholder="Search" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="w-full bg-transparent text-sm text-wire-text outline-none placeholder:text-wire-muted"
+            placeholder="Search"
+          />
         </label>
         <p className="px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-wire-faint">Settings</p>
         <ul className="space-y-1">
-          {SECTIONS.map((s) => (
+          {shown.length === 0 ? <li className="px-2.5 py-2 text-xs text-wire-faint">No matching settings</li> : null}
+          {shown.map((s) => (
             <li key={s}>
               <button
                 type="button"

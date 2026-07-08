@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '../routes';
 import { Button, Pill } from '../kit';
@@ -57,11 +57,14 @@ function Chevron({ open }: { open: boolean }) {
   );
 }
 
-function ServiceCard({ name, desc, selected }: { name: string; desc: string; selected: boolean }) {
+function ServiceCard({ name, desc, selected, onClick }: { name: string; desc: string; selected: boolean; onClick: () => void }) {
   return (
-    <div
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={selected}
       className={[
-        'relative cursor-pointer rounded-lg border bg-wire-surface p-4 transition-all',
+        'relative w-full cursor-pointer rounded-lg border bg-wire-surface p-4 text-left transition-all',
         selected ? 'border-brand shadow-card' : 'border-wire-border hover:border-wire-border-strong',
       ].join(' ')}
     >
@@ -75,23 +78,24 @@ function ServiceCard({ name, desc, selected }: { name: string; desc: string; sel
       </div>
       <p className="mt-3 text-sm font-medium text-wire-text">{name}</p>
       <p className="mt-0.5 text-xs text-wire-muted">{desc}</p>
-    </div>
+    </button>
   );
 }
 
 function Accordion({ title, hint, open = false, children }: { title: string; hint?: string; open?: boolean; children?: ReactNode }) {
+  const [isOpen, setIsOpen] = useState(open);
   return (
     <div className="rounded-lg border border-wire-border bg-wire-surface">
-      <div className="flex cursor-pointer items-center justify-between px-4 py-3">
+      <button type="button" onClick={() => setIsOpen((v) => !v)} className="flex w-full cursor-pointer items-center justify-between px-4 py-3 text-left">
         <div>
           <p className="text-sm font-medium text-wire-text">{title}</p>
           {hint ? <p className="text-xs text-wire-muted">{hint}</p> : null}
         </div>
-        <span className={open ? 'text-brand' : 'text-wire-muted'}>
-          <Chevron open={open} />
+        <span className={isOpen ? 'text-brand' : 'text-wire-muted'}>
+          <Chevron open={isOpen} />
         </span>
-      </div>
-      {open ? <div className="border-t border-wire-border p-4">{children}</div> : null}
+      </button>
+      {isOpen ? <div className="border-t border-wire-border p-4">{children}</div> : null}
     </div>
   );
 }
@@ -112,6 +116,8 @@ function Dropdown({ label, value }: { label: string; value: string }) {
 
 function EcommerceSetup() {
   const navigate = useNavigate();
+  const [shots, setShots] = useState(SHOTS);
+  const toggleShot = (name: string) => setShots((prev) => prev.map((s) => (s.name === name ? { ...s, selected: !s.selected } : s)));
   return (
     <div className="space-y-3">
       {/* 1 — Look (owns references + background) */}
@@ -152,7 +158,7 @@ function EcommerceSetup() {
       {/* 2 — SKU Shots (angles + directions combined) */}
       <Accordion title="SKU Shots" hint="Select the shots you need and edit the direction for each one." open>
         <div className="grid grid-cols-2 gap-3">
-          {SHOTS.map((s) => (
+          {shots.map((s) => (
             <div
               key={s.name}
               className={[
@@ -163,10 +169,10 @@ function EcommerceSetup() {
               <div className="flex h-20 items-center justify-center rounded-md border border-wire-border bg-gradient-to-br from-wire-bg-2 to-wire-bg">
                 <span className="text-[10px] text-wire-faint">preview</span>
               </div>
-              <div className="mt-2 flex items-center justify-between">
+              <button type="button" onClick={() => toggleShot(s.name)} className="mt-2 flex w-full items-center justify-between text-left">
                 <p className="text-sm font-medium text-wire-text">{s.name}</p>
                 <Check on={s.selected} />
-              </div>
+              </button>
               <div className="mt-2">
                 <p className="mb-1 text-[11px] font-medium text-wire-muted">Shot direction</p>
                 <div className="rounded-md border border-wire-border bg-wire-bg px-2 py-2 text-xs text-wire-text">{s.direction}</div>
@@ -191,8 +197,49 @@ function EcommerceSetup() {
   );
 }
 
+function SelectedService({ name, defaultOpen }: { name: string; defaultOpen: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className={['overflow-hidden rounded-lg border bg-wire-surface', open ? 'border-brand shadow-card' : 'border-wire-border'].join(' ')}>
+      <button type="button" onClick={() => setOpen((v) => !v)} className={['flex w-full cursor-pointer items-center justify-between px-4 py-3 text-left', open ? 'bg-brand-weak' : ''].join(' ')}>
+        <div className="flex items-center gap-3">
+          <div className={['grid h-8 w-8 place-items-center rounded-md', open ? 'bg-brand text-white' : 'bg-wire-bg-2 text-wire-muted'].join(' ')}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M3 9l1-5h16l1 5M4 9h16v11H4zM9 13h6" />
+            </svg>
+          </div>
+          <div>
+            <p className="text-sm font-medium text-wire-text">{name}</p>
+            <p className="text-xs text-wire-muted">Look, shots &amp; settings</p>
+          </div>
+        </div>
+        <span className={open ? 'text-brand' : 'text-wire-muted'}><Chevron open={open} /></span>
+      </button>
+      {open ? (
+        <div className="border-t border-wire-border p-4">
+          {name === 'E-Commerce' ? (
+            <EcommerceSetup />
+          ) : (
+            <div className="rounded-lg border border-dashed border-wire-border bg-wire-bg px-4 py-8 text-center text-sm text-wire-muted">
+              Look, shots &amp; settings for {name} — configure like E-Commerce.
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function ServiceSetup() {
   const navigate = useNavigate();
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(SERVICE_TYPES.filter((s) => s.selected).map((s) => s.name)));
+  const toggle = (name: string) => setSelected((prev) => {
+    const next = new Set(prev);
+    next.has(name) ? next.delete(name) : next.add(name);
+    return next;
+  });
+  const selectedTypes = SERVICE_TYPES.filter((s) => selected.has(s.name));
+
   return (
     <div className="mx-auto max-w-4xl space-y-8">
       {/* Heading */}
@@ -206,42 +253,26 @@ export default function ServiceSetup() {
       {/* Service Type grid (multi-select) */}
       <div className="grid grid-cols-3 gap-4">
         {SERVICE_TYPES.map((s) => (
-          <ServiceCard key={s.name} name={s.name} desc={s.desc} selected={s.selected} />
+          <ServiceCard key={s.name} name={s.name} desc={s.desc} selected={selected.has(s.name)} onClick={() => toggle(s.name)} />
         ))}
       </div>
 
       {/* Selected Service Types — accordion(s) */}
       <div className="space-y-3">
-        <p className="text-xs font-medium uppercase tracking-wide text-wire-muted">Selected · 1</p>
-
-        {/* E-Commerce — expanded accordion with full setup */}
-        <div className="overflow-hidden rounded-lg border border-brand bg-wire-surface shadow-card">
-          <div className="flex cursor-pointer items-center justify-between bg-brand-weak px-4 py-3">
-            <div className="flex items-center gap-3">
-              <div className="grid h-8 w-8 place-items-center rounded-md bg-brand text-white">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M3 9l1-5h16l1 5M4 9h16v11H4zM9 13h6" />
-                </svg>
-              </div>
-              <div>
-                <p className="text-sm font-medium text-wire-text">E-Commerce</p>
-                <p className="text-xs text-wire-muted">Look, shots &amp; settings</p>
-              </div>
-            </div>
-            <span className="text-brand">
-              <Chevron open />
-            </span>
+        <p className="text-xs font-medium uppercase tracking-wide text-wire-muted">Selected · {selected.size}</p>
+        {selectedTypes.length > 0 ? (
+          selectedTypes.map((s, i) => <SelectedService key={s.name} name={s.name} defaultOpen={i === 0} />)
+        ) : (
+          <div className="rounded-lg border border-dashed border-wire-border bg-wire-surface px-6 py-10 text-center text-sm text-wire-muted">
+            Select at least one Service Type above to configure it.
           </div>
-          <div className="border-t border-wire-border p-4">
-            <EcommerceSetup />
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Action bar — Go back + primary */}
       <div className="flex items-center justify-end gap-3 border-t border-wire-border pt-4">
         <Button variant="secondary" onClick={() => navigate(ROUTES.addSkuStored)}>Go back</Button>
-        <Button onClick={() => navigate(ROUTES.propsAssets)}>Continue to Props &amp; Assets</Button>
+        <Button onClick={() => navigate(ROUTES.propsAssets)} disabled={selected.size === 0}>Continue to Props &amp; Assets</Button>
       </div>
     </div>
   );

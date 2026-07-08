@@ -1,7 +1,8 @@
-import { createBrowserRouter, Navigate } from 'react-router-dom';
+import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 import AppShell from './AppShell';
 import WorkspaceShell from './WorkspaceShell';
 import { ROUTES } from './routes';
+import { ProjectsProvider } from './data/projects';
 
 // Global nav screens
 import Dashboard from './screens/Dashboard';
@@ -31,9 +32,21 @@ import AddSkuStored, { AddSkuStoredEmpty } from './screens/AddSkuStored';
 import PrepareSku from './screens/PrepareSku';
 import GroupSku from './screens/GroupSku';
 
+// Wraps every real screen in the shared projects data provider (live Supabase source).
+function RootLayout() {
+  return (
+    <ProjectsProvider>
+      <Outlet />
+    </ProjectsProvider>
+  );
+}
+
 export const router = createBrowserRouter([
   { path: ROUTES.root, element: <Navigate to={ROUTES.dashboard} replace /> },
 
+  {
+    element: <RootLayout />,
+    children: [
   // Global navigation pages — app shell
   {
     element: <AppShell />,
@@ -74,6 +87,8 @@ export const router = createBrowserRouter([
       { path: ROUTES.addSkuStoredEmpty,   element: <AddSkuStoredEmpty /> },
       { path: ROUTES.prepareSku,          element: <PrepareSku /> },
       { path: ROUTES.groupSku,            element: <GroupSku /> },
+    ],
+  },
     ],
   },
 
