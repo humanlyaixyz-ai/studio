@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseStorage } from '../lib/supabase';
 import { Project, ProjectAssets, AssetFile, GenerationBatch, GeneratedImage, SKU } from '../types';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -26,7 +26,7 @@ async function downloadAsBase64(url: string): Promise<{ data: string; mimeType: 
 }
 
 function publicUrl(bucket: string, path: string): string {
-  return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+  return supabaseStorage.storage.from(bucket).getPublicUrl(path).data.publicUrl;
 }
 
 function safeExt(mimeType: string): string {
@@ -103,7 +103,7 @@ export async function deleteProject(id: string): Promise<void> {
     .eq('project_id', id);
 
   if (assetRows?.length) {
-    await supabase.storage.from('project-assets').remove(assetRows.map(r => r.storage_path));
+    await supabaseStorage.storage.from('project-assets').remove(assetRows.map(r => r.storage_path));
   }
 
   // Collect and delete generated image storage files
@@ -120,7 +120,7 @@ export async function deleteProject(id: string): Promise<void> {
       .not('storage_path', 'is', null);
 
     if (imgRows?.length) {
-      await supabase.storage
+      await supabaseStorage.storage
         .from('generated-images')
         .remove(imgRows.map(r => r.storage_path).filter(Boolean));
     }
@@ -158,7 +158,7 @@ export async function uploadAndSaveAsset(
   const storagePath = `${projectId}/${slotKey}/${assetId}.${safeExt(mimeType)}`;
 
   const blob = await base64ToBlob(base64, mimeType);
-  const { error: upErr } = await supabase.storage
+  const { error: upErr } = await supabaseStorage.storage
     .from('project-assets')
     .upload(storagePath, blob, { contentType: mimeType, upsert: true });
   if (upErr) throw new Error(`[storage] uploadAsset: ${upErr.message}`);
@@ -264,7 +264,7 @@ async function saveGeneratedImage(batchId: string, img: GeneratedImage): Promise
 
       storagePath = `${batchId}/${img.id}.${safeExt(mimeType)}`;
       const blob = await base64ToBlob(base64, mimeType);
-      await supabase.storage
+      await supabaseStorage.storage
         .from('generated-images')
         .upload(storagePath, blob, { contentType: mimeType, upsert: true });
     } catch (e) {
@@ -433,7 +433,7 @@ export async function uploadSKUAsset(
   const storagePath = `skus/${projectId}/${skuId}/${slotKey}.${safeExt(mimeType)}`;
   const blob = await base64ToBlob(base64, mimeType);
 
-  const { error: upErr } = await supabase.storage
+  const { error: upErr } = await supabaseStorage.storage
     .from('project-assets')
     .upload(storagePath, blob, { contentType: mimeType, upsert: true });
   if (upErr) throw new Error(`[storage] uploadSKUAsset: ${upErr.message}`);
@@ -456,7 +456,7 @@ export async function deleteSKU(skuId: string): Promise<void> {
     .eq('sku_id', skuId);
 
   if (assetRows?.length) {
-    await supabase.storage.from('project-assets').remove(assetRows.map(r => r.storage_path));
+    await supabaseStorage.storage.from('project-assets').remove(assetRows.map(r => r.storage_path));
   }
 
   await supabase.from('skus').delete().eq('id', skuId);
@@ -470,7 +470,7 @@ export async function deleteGenerationBatch(batchId: string): Promise<void> {
     .not('storage_path', 'is', null);
 
   if (imgRows?.length) {
-    await supabase.storage
+    await supabaseStorage.storage
       .from('generated-images')
       .remove(imgRows.map(r => r.storage_path).filter(Boolean));
   }
