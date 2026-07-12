@@ -143,7 +143,7 @@ function StoredScreen({ empty: forceEmpty }: { empty: boolean }) {
       {error ? (
         <div className="rounded-lg border border-danger/40 bg-danger-weak px-4 py-3 text-sm text-wire-text">
           <span className="font-semibold text-danger">Upload failed:</span> {error}
-          <span className="mt-1 block text-xs text-wire-muted">Image uploads to storage were rejected. A Supabase Storage policy must allow the anon key to write to the <code>project-assets</code> bucket.</span>
+          <span className="mt-1 block text-xs text-wire-muted">The SKU image couldn&rsquo;t be saved to storage. Check your connection and try again.</span>
         </div>
       ) : null}
 

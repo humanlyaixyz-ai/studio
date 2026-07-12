@@ -306,12 +306,21 @@ export async function loadProjectBatches(projectId: string): Promise<GenerationB
       prompt:         ir.prompt || '',
       errorMessage:   ir.error_message   || undefined,
       generationTime: ir.generation_time || undefined,
-      url:            ir.storage_path ? publicUrl('generated-images', ir.storage_path) : undefined,
+      // storage_path may be: a bucket path (→ public URL), a full external URL
+      // (legacy Kie temp links, use as-is), or null (never persisted → no image).
+      url:            !ir.storage_path ? undefined
+                        : /^https?:\/\//.test(ir.storage_path) ? ir.storage_path
+                        : publicUrl('generated-images', ir.storage_path),
     })),
   }));
 }
 
 // ── SKUs ──────────────────────────────────────────────────────────────────────
+
+export interface SkuAsset {
+  slotKey: string;
+  url?: string; // public URL (project-assets bucket is public-read)
+}
 
 export interface SkuSummary {
   id: string;
@@ -319,7 +328,8 @@ export interface SkuSummary {
   skuCode?: string;
   createdAt: number;
   slotKeys: string[];
-  thumbUrl?: string; // public URL of a representative image (front preferred)
+  assets: SkuAsset[];       // one entry per stored slot, with a public thumbnail URL
+  thumbUrl?: string;        // public URL of a representative image (front preferred)
 }
 
 // Lightweight list loader — SKU rows + their asset slot_keys and a thumbnail URL,
@@ -342,11 +352,15 @@ export async function loadSkuSummaries(projectId: string): Promise<SkuSummary[]>
     .in('sku_id', ids);
   if (aErr) console.error('[db] loadSkuSummaries assets:', aErr.message);
 
-  const bySku: Record<string, { slotKeys: string[]; front?: string; any?: string }> = {};
+  const bySku: Record<string, { slotKeys: string[]; assets: SkuAsset[]; front?: string; any?: string }> = {};
   for (const a of assetRows || []) {
     const row = a as { sku_id: string; slot_key: string; storage_path: string };
-    const entry = (bySku[row.sku_id] ||= { slotKeys: [] });
+    const entry = (bySku[row.sku_id] ||= { slotKeys: [], assets: [] });
     entry.slotKeys.push(row.slot_key);
+    entry.assets.push({
+      slotKey: row.slot_key,
+      url: row.storage_path ? publicUrl('project-assets', row.storage_path) : undefined,
+    });
     if (row.storage_path) {
       entry.any ??= row.storage_path;
       if (/front/i.test(row.slot_key)) entry.front ??= row.storage_path;
@@ -362,6 +376,7 @@ export async function loadSkuSummaries(projectId: string): Promise<SkuSummary[]>
       skuCode: r.sku_code || undefined,
       createdAt: r.created_at,
       slotKeys: entry?.slotKeys || [],
+      assets: entry?.assets || [],
       thumbUrl: thumbPath ? publicUrl('project-assets', thumbPath) : undefined,
     };
   });

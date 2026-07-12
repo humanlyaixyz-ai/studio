@@ -77,6 +77,7 @@ interface ProjectsCtx {
   reload: () => void;
   select: (id: string | null) => void;
   create: (project: Project) => Promise<Project>;
+  update: (id: string, patch: Partial<Project>) => Promise<void>;
   remove: (id: string) => Promise<void>;
   rename: (id: string, name: string) => Promise<void>;
   duplicate: (id: string) => Promise<void>;
@@ -143,6 +144,18 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
     return project;
   }, [select, reload]);
 
+  const update = useCallback(async (id: string, patch: Partial<Project>) => {
+    let updated: Project | undefined;
+    setProjects((prev) => prev.map((p) => {
+      if (p.id !== id) return p;
+      updated = { ...p, ...patch };
+      return updated;
+    }));
+    if (updated) {
+      try { await db.saveProject(updated); } catch (e) { console.error('[projects] update:', e); reload(); }
+    }
+  }, [reload]);
+
   const remove = useCallback(async (id: string) => {
     setProjects((prev) => prev.filter((p) => p.id !== id));
     try { await db.deleteProject(id); } catch (e) { console.error('[projects] delete:', e); reload(); }
@@ -186,8 +199,8 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<ProjectsCtx>(() => ({
     projects, skuCounts, archivedIds, loading, error, selectedId,
-    reload, select, create, remove, rename, duplicate, setArchived,
-  }), [projects, skuCounts, archivedIds, loading, error, selectedId, reload, select, create, remove, rename, duplicate, setArchived]);
+    reload, select, create, update, remove, rename, duplicate, setArchived,
+  }), [projects, skuCounts, archivedIds, loading, error, selectedId, reload, select, create, update, remove, rename, duplicate, setArchived]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

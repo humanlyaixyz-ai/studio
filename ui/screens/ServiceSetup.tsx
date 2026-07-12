@@ -1,7 +1,10 @@
-import { useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '../routes';
 import { Button, Pill } from '../kit';
+import { useProjects } from '../data/projects';
+
+type Shot = { name: string; selected: boolean; direction: string };
 
 /**
  * ServiceSetup — hi-fi build of ServiceSetupWireframe.
@@ -114,10 +117,8 @@ function Dropdown({ label, value }: { label: string; value: string }) {
   );
 }
 
-function EcommerceSetup() {
+function EcommerceSetup({ shots, toggleShot, editDirection }: { shots: Shot[]; toggleShot: (name: string) => void; editDirection: (name: string, direction: string) => void }) {
   const navigate = useNavigate();
-  const [shots, setShots] = useState(SHOTS);
-  const toggleShot = (name: string) => setShots((prev) => prev.map((s) => (s.name === name ? { ...s, selected: !s.selected } : s)));
   return (
     <div className="space-y-3">
       {/* 1 — Look (owns references + background) */}
@@ -175,7 +176,13 @@ function EcommerceSetup() {
               </button>
               <div className="mt-2">
                 <p className="mb-1 text-[11px] font-medium text-wire-muted">Shot direction</p>
-                <div className="rounded-md border border-wire-border bg-wire-bg px-2 py-2 text-xs text-wire-text">{s.direction}</div>
+                <textarea
+                  value={s.direction}
+                  onChange={(e) => editDirection(s.name, e.target.value)}
+                  rows={2}
+                  disabled={!s.selected}
+                  className="w-full resize-none rounded-md border border-wire-border bg-wire-bg px-2 py-2 text-xs text-wire-text focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand disabled:opacity-50"
+                />
               </div>
             </div>
           ))}
@@ -197,7 +204,7 @@ function EcommerceSetup() {
   );
 }
 
-function SelectedService({ name, defaultOpen }: { name: string; defaultOpen: boolean }) {
+function SelectedService({ name, defaultOpen, shots, toggleShot, editDirection }: { name: string; defaultOpen: boolean; shots: Shot[]; toggleShot: (name: string) => void; editDirection: (name: string, direction: string) => void }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className={['overflow-hidden rounded-lg border bg-wire-surface', open ? 'border-brand shadow-card' : 'border-wire-border'].join(' ')}>
@@ -218,7 +225,7 @@ function SelectedService({ name, defaultOpen }: { name: string; defaultOpen: boo
       {open ? (
         <div className="border-t border-wire-border p-4">
           {name === 'E-Commerce' ? (
-            <EcommerceSetup />
+            <EcommerceSetup shots={shots} toggleShot={toggleShot} editDirection={editDirection} />
           ) : (
             <div className="rounded-lg border border-dashed border-wire-border bg-wire-bg px-4 py-8 text-center text-sm text-wire-muted">
               Look, shots &amp; settings for {name} — configure like E-Commerce.
@@ -232,6 +239,9 @@ function SelectedService({ name, defaultOpen }: { name: string; defaultOpen: boo
 
 export default function ServiceSetup() {
   const navigate = useNavigate();
+  const { projects, selectedId, update } = useProjects();
+  const project = projects.find((p) => p.id === selectedId);
+
   const [selected, setSelected] = useState<Set<string>>(() => new Set(SERVICE_TYPES.filter((s) => s.selected).map((s) => s.name)));
   const toggle = (name: string) => setSelected((prev) => {
     const next = new Set(prev);
@@ -239,6 +249,39 @@ export default function ServiceSetup() {
     return next;
   });
   const selectedTypes = SERVICE_TYPES.filter((s) => selected.has(s.name));
+
+  // Seed shot selection from the project's saved shots (round-trips by direction text).
+  const initialShots = useMemo<Shot[]>(() => {
+    const saved = project?.shots;
+    if (saved && saved.length > 0) {
+      const savedPrompts = new Set(saved.map((s) => s.prompt));
+      const merged: Shot[] = SHOTS.map((s) => ({ ...s, selected: savedPrompts.has(s.direction) }));
+      // Any saved prompt not matching a default shot becomes an extra selected shot.
+      saved.forEach((s, i) => {
+        if (!SHOTS.some((d) => d.direction === s.prompt)) {
+          merged.push({ name: `Custom ${i + 1}`, selected: true, direction: s.prompt });
+        }
+      });
+      return merged;
+    }
+    return SHOTS;
+  }, [project?.id]);
+
+  const [shots, setShots] = useState<Shot[]>(initialShots);
+  const toggleShot = (name: string) => setShots((prev) => prev.map((s) => (s.name === name ? { ...s, selected: !s.selected } : s)));
+  const editDirection = (name: string, direction: string) => setShots((prev) => prev.map((s) => (s.name === name ? { ...s, direction } : s)));
+
+  const [saving, setSaving] = useState(false);
+  const persistAndContinue = async () => {
+    const chosen = shots.filter((s) => s.selected).map((s) => ({ prompt: s.direction }));
+    if (selectedId && chosen.length > 0) {
+      setSaving(true);
+      try { await update(selectedId, { shots: chosen }); } finally { setSaving(false); }
+    }
+    navigate(ROUTES.propsAssets);
+  };
+
+  const selectedShotCount = shots.filter((s) => s.selected).length;
 
   return (
     <div className="mx-auto max-w-4xl space-y-8">
@@ -261,7 +304,7 @@ export default function ServiceSetup() {
       <div className="space-y-3">
         <p className="text-xs font-medium uppercase tracking-wide text-wire-muted">Selected · {selected.size}</p>
         {selectedTypes.length > 0 ? (
-          selectedTypes.map((s, i) => <SelectedService key={s.name} name={s.name} defaultOpen={i === 0} />)
+          selectedTypes.map((s, i) => <SelectedService key={s.name} name={s.name} defaultOpen={i === 0} shots={shots} toggleShot={toggleShot} editDirection={editDirection} />)
         ) : (
           <div className="rounded-lg border border-dashed border-wire-border bg-wire-surface px-6 py-10 text-center text-sm text-wire-muted">
             Select at least one Service Type above to configure it.
@@ -270,9 +313,14 @@ export default function ServiceSetup() {
       </div>
 
       {/* Action bar — Go back + primary */}
-      <div className="flex items-center justify-end gap-3 border-t border-wire-border pt-4">
-        <Button variant="secondary" onClick={() => navigate(ROUTES.addSkuStored)}>Go back</Button>
-        <Button onClick={() => navigate(ROUTES.propsAssets)} disabled={selected.size === 0}>Continue to Props &amp; Assets</Button>
+      <div className="flex items-center justify-between gap-3 border-t border-wire-border pt-4">
+        <p className="text-xs text-wire-muted">{selectedShotCount} shot{selectedShotCount === 1 ? '' : 's'} will be saved for generation.</p>
+        <div className="flex items-center gap-3">
+          <Button variant="secondary" onClick={() => navigate(ROUTES.addSkuStored)}>Go back</Button>
+          <Button onClick={persistAndContinue} disabled={selected.size === 0 || saving}>
+            {saving ? 'Saving…' : 'Continue to Props & Assets'}
+          </Button>
+        </div>
       </div>
     </div>
   );
