@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button, Pill } from '../kit';
+import * as db from '../../services/dbService';
+import type { StudioStats } from '../../services/dbService';
 
 /**
  * Billing — hi-fi build of BillingWireframe.
@@ -274,79 +276,88 @@ function PlansTab() {
 }
 
 function UsageTab() {
-  const [range, setRange] = useState('30 days');
-  const model = 'All models'; // model filter is static in the wireframe
+  const [stats, setStats] = useState<StudioStats | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    db.loadStudioStats().then((s) => { if (!cancelled) setStats(s); }).finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const maxDay = useMemo(() => Math.max(1, ...(stats?.last14Days.map((d) => d.count) || [1])), [stats]);
+  const kpis = stats ? [
+    { label: 'Images generated', value: String(stats.successImages), sub: 'all time' },
+    { label: 'Generations', value: String(stats.batches), sub: 'batches run' },
+    { label: 'Avg / generation', value: stats.batches ? (stats.successImages / stats.batches).toFixed(1) : '0', sub: 'images per batch' },
+    { label: 'Failed', value: String(stats.failedImages), sub: stats.images ? `${Math.round((stats.failedImages / stats.images) * 100)}% of attempts` : '0%' },
+  ] : [];
+
   return (
     <div className="space-y-6">
-      {/* filters */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-wire-muted">Time</span>
-          {RANGES.map((r) => (
-            <button
-              key={r}
-              type="button"
-              onClick={() => setRange(r)}
-              className={['rounded-full border px-3 py-1 text-xs font-medium transition-colors', range === r ? 'border-brand-weak-2 bg-brand-weak text-brand' : 'border-wire-border bg-wire-surface text-wire-muted hover:border-wire-border-strong'].join(' ')}
-            >
-              {r}
-            </button>
-          ))}
-          <span className="flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-wire-border px-3 py-1 text-xs text-wire-muted">Custom {chevron}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-wire-muted">Model</span>
-          <div className="flex h-8 w-48 cursor-pointer items-center justify-between rounded-md border border-wire-border bg-wire-surface px-3 text-sm text-wire-text hover:border-wire-border-strong">
-            {model} {chevron}
-          </div>
-        </div>
+      <div className="rounded-md border border-brand-weak-2 bg-brand-weak px-3 py-2 text-xs text-wire-text">
+        Real usage from your generations. Credits/pricing above are a preview until billing is connected.
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-4 gap-4">
-        {KPIS.map((k) => (
-          <div key={k.label} className="rounded-lg border border-wire-border bg-wire-surface p-4 shadow-card">
-            <p className="text-xs text-wire-muted">{k.label}</p>
-            <p className="mt-1 text-2xl font-semibold text-wire-text">{k.value}</p>
-            <p className="mt-0.5 text-[11px] text-wire-muted">{k.sub}</p>
+      {loading ? (
+        <div className="grid grid-cols-4 gap-4">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-lg bg-wire-bg-2" />)}</div>
+      ) : stats ? (
+        <>
+          {/* KPIs */}
+          <div className="grid grid-cols-4 gap-4">
+            {kpis.map((k) => (
+              <div key={k.label} className="rounded-lg border border-wire-border bg-wire-surface p-4 shadow-card">
+                <p className="text-xs text-wire-muted">{k.label}</p>
+                <p className="mt-1 text-2xl font-semibold text-wire-text">{k.value}</p>
+                <p className="mt-0.5 text-[11px] text-wire-muted">{k.sub}</p>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
 
-      {/* usage over time */}
-      <div className="rounded-lg border border-wire-border bg-wire-surface p-5 shadow-card">
-        <div className="mb-4 flex items-center justify-between">
-          <p className="text-sm font-semibold text-wire-text">Credits used over time</p>
-          <span className="text-xs text-wire-muted">Last {range} · {model}</span>
-        </div>
-        <div className="flex h-40 items-end gap-2">
-          {BARS.map((h, i) => (
-            <div key={i} className="flex-1 rounded-t bg-brand-weak transition-colors hover:bg-brand" style={{ height: `${h}%` }} aria-hidden />
-          ))}
-        </div>
-      </div>
-
-      {/* by model */}
-      <div className="rounded-lg border border-wire-border bg-wire-surface p-5 shadow-card">
-        <p className="mb-3 text-sm font-semibold text-wire-text">Usage by model</p>
-        <div className="overflow-hidden rounded-md border border-wire-border">
-          <div className="flex items-center bg-wire-bg px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-wire-muted">
-            <span className="flex-1">Model</span>
-            <span className="w-28 text-right">Images</span>
-            <span className="w-28 text-right">Credits</span>
-            <span className="w-32 text-right">Avg / image</span>
-          </div>
-          {BY_MODEL.map((m, i) => (
-            <div key={m.model} className={['flex items-center px-4 py-3 text-sm', i > 0 ? 'border-t border-wire-border' : ''].join(' ')}>
-              <span className="flex-1 font-medium text-wire-text">{m.model}</span>
-              <span className="w-28 text-right text-wire-text">{m.images}</span>
-              <span className="w-28 text-right text-wire-text">{m.credits}</span>
-              <span className="w-32 text-right text-wire-muted">{m.avg}</span>
+          {/* images over time */}
+          <div className="rounded-lg border border-wire-border bg-wire-surface p-5 shadow-card">
+            <div className="mb-4 flex items-center justify-between">
+              <p className="text-sm font-semibold text-wire-text">Images generated over time</p>
+              <span className="text-xs text-wire-muted">Last 14 days</span>
             </div>
-          ))}
-        </div>
-        <p className="mt-3 text-xs text-wire-muted">Placeholder figures — final data later.</p>
-      </div>
+            {stats.successImages === 0 ? (
+              <p className="py-8 text-center text-sm text-wire-muted">No generated images yet.</p>
+            ) : (
+              <div className="flex h-40 items-end gap-2">
+                {stats.last14Days.map((d) => (
+                  <div key={d.label} className="flex flex-1 flex-col items-center gap-1">
+                    <div className="flex w-full flex-1 items-end">
+                      <div className="w-full rounded-t bg-brand transition-colors" style={{ height: `${(d.count / maxDay) * 100}%`, minHeight: d.count > 0 ? 4 : 0 }} title={`${d.count} · ${d.label}`} />
+                    </div>
+                    <span className="text-[9px] text-wire-muted">{d.label}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* by model */}
+          <div className="rounded-lg border border-wire-border bg-wire-surface p-5 shadow-card">
+            <p className="mb-3 text-sm font-semibold text-wire-text">Images by shoot model</p>
+            {stats.byModel.length === 0 ? (
+              <p className="text-sm text-wire-muted">No generations yet.</p>
+            ) : (
+              <div className="overflow-hidden rounded-md border border-wire-border">
+                <div className="flex items-center bg-wire-bg px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-wire-muted">
+                  <span className="flex-1">Model</span>
+                  <span className="w-28 text-right">Images</span>
+                </div>
+                {stats.byModel.map((m, i) => (
+                  <div key={m.model} className={['flex items-center px-4 py-3 text-sm', i > 0 ? 'border-t border-wire-border' : ''].join(' ')}>
+                    <span className="flex-1 font-medium text-wire-text">{m.model.replace(/_/g, ' ').toLowerCase()}</span>
+                    <span className="w-28 text-right text-wire-text">{m.images}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

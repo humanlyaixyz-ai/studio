@@ -477,6 +477,145 @@ export async function deleteSKU(skuId: string): Promise<void> {
   await supabase.from('skus').delete().eq('id', skuId);
 }
 
+// ── Analytics / activity (computed from existing tables, no new schema) ─────────
+
+export interface StudioStats {
+  projects: number;
+  skus: number;
+  batches: number;
+  images: number;
+  successImages: number;
+  failedImages: number;
+  byModel: { model: string; images: number }[];
+  last14Days: { label: string; count: number }[]; // successful images per day
+}
+
+export async function loadStudioStats(): Promise<StudioStats> {
+  const [projCount, skuCount, batchRows, imgRows] = await Promise.all([
+    supabase.from('projects').select('id', { count: 'exact', head: true }),
+    supabase.from('skus').select('id', { count: 'exact', head: true }),
+    supabase.from('generation_batches').select('id, model'),
+    supabase.from('generated_images').select('batch_id, status, created_at'),
+  ]);
+
+  const batches = batchRows.data || [];
+  const images = imgRows.data || [];
+  const modelByBatch = new Map(batches.map((b: any) => [b.id, b.model]));
+
+  const success = images.filter((i: any) => i.status === 'success');
+  const failed = images.filter((i: any) => i.status === 'failed');
+
+  const modelTally: Record<string, number> = {};
+  for (const img of success) {
+    const m = modelByBatch.get((img as any).batch_id) || 'unknown';
+    modelTally[m] = (modelTally[m] || 0) + 1;
+  }
+  const byModel = Object.entries(modelTally).map(([model, images]) => ({ model, images })).sort((a, b) => b.images - a.images);
+
+  // Last 14 days of successful images, bucketed by created_at date.
+  const dayMs = 86_400_000;
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const last14Days = Array.from({ length: 14 }, (_, i) => {
+    const dayStart = startOfToday - (13 - i) * dayMs;
+    const label = new Date(dayStart).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const count = success.filter((img: any) => {
+      const t = img.created_at ? new Date(img.created_at).getTime() : NaN;
+      return t >= dayStart && t < dayStart + dayMs;
+    }).length;
+    return { label, count };
+  });
+
+  return {
+    projects: projCount.count || 0,
+    skus: skuCount.count || 0,
+    batches: batches.length,
+    images: images.length,
+    successImages: success.length,
+    failedImages: failed.length,
+    byModel,
+    last14Days,
+  };
+}
+
+export interface ActivityItem {
+  id: string;
+  kind: 'project' | 'generation';
+  title: string;
+  detail: string;
+  timestamp: number;
+}
+
+// Activity feed derived from real recent projects + generation batches (no notifications table).
+export async function loadActivity(limit = 40): Promise<ActivityItem[]> {
+  const [projs, batches] = await Promise.all([
+    supabase.from('projects').select('id, name, created_at').order('created_at', { ascending: false }).limit(limit),
+    supabase.from('generation_batches').select('id, timestamp, model, category, project_id').order('timestamp', { ascending: false }).limit(limit),
+  ]);
+
+  const projName = new Map((projs.data || []).map((p: any) => [p.id, p.name]));
+  const items: ActivityItem[] = [];
+  for (const p of projs.data || []) {
+    items.push({ id: `p-${p.id}`, kind: 'project', title: p.name || 'Untitled project', detail: 'Project created', timestamp: Number(p.created_at) || 0 });
+  }
+  for (const b of batches.data || []) {
+    const name = projName.get((b as any).project_id) || (b as any).category;
+    items.push({ id: `b-${b.id}`, kind: 'generation', title: `${name}`, detail: `Generated a ${String((b as any).model).replace(/_/g, ' ').toLowerCase()} batch`, timestamp: Number((b as any).timestamp) || 0 });
+  }
+  return items.sort((a, b) => b.timestamp - a.timestamp).slice(0, limit);
+}
+
+export interface AllAsset {
+  id: string;
+  projectId: string;
+  slotKey: string;
+  url: string;
+}
+
+// Every project asset across all projects — the global Assets Library view (no separate table).
+export async function loadAllAssets(): Promise<AllAsset[]> {
+  const { data, error } = await supabase
+    .from('project_assets')
+    .select('id, project_id, slot_key, storage_path, created_at')
+    .order('created_at', { ascending: false });
+  if (error) { console.error('[db] loadAllAssets:', error.message); return []; }
+  return (data || [])
+    .filter((r: any) => r.storage_path)
+    .map((r: any) => ({ id: r.id, projectId: r.project_id, slotKey: r.slot_key, url: publicUrl('project-assets', r.storage_path) }));
+}
+
+// ── Lightweight document store (JSON in the project-assets bucket) ──────────────
+// Used for config-style collections that have no dedicated table yet (Looks, Brand Kits).
+// Persists across sessions/users via Storage. Writes use the storage client (service key).
+
+const DOC_PREFIX = '_docs';
+
+export async function saveDoc(collection: string, id: string, obj: Record<string, any>): Promise<void> {
+  const path = `${DOC_PREFIX}/${collection}/${id}.json`;
+  const blob = new Blob([JSON.stringify({ ...obj, id })], { type: 'application/json' });
+  const { error } = await supabaseStorage.storage.from('app-docs').upload(path, blob, { contentType: 'application/json', upsert: true });
+  if (error) throw new Error(`[docs] save ${collection}: ${error.message}`);
+}
+
+export async function listDocs<T = Record<string, any>>(collection: string): Promise<T[]> {
+  const { data: files, error } = await supabaseStorage.storage.from('app-docs').list(`${DOC_PREFIX}/${collection}`, { limit: 1000 });
+  if (error) { console.error(`[docs] list ${collection}:`, error.message); return []; }
+  const jsons = (files || []).filter((f) => f.name.endsWith('.json'));
+  const out = await Promise.all(jsons.map(async (f) => {
+    try {
+      const url = publicUrl('app-docs', `${DOC_PREFIX}/${collection}/${f.name}`);
+      const res = await fetch(`${url}?t=${f.updated_at || ''}`);
+      if (!res.ok) return null;
+      return (await res.json()) as T;
+    } catch { return null; }
+  }));
+  return out.filter(Boolean) as T[];
+}
+
+export async function deleteDoc(collection: string, id: string): Promise<void> {
+  await supabaseStorage.storage.from('app-docs').remove([`${DOC_PREFIX}/${collection}/${id}.json`]);
+}
+
 export async function deleteGenerationBatch(batchId: string): Promise<void> {
   const { data: imgRows } = await supabase
     .from('generated_images')
