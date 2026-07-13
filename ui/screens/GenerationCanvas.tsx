@@ -5,7 +5,7 @@ import { Button } from '../kit';
 import { useProjects } from '../data/projects';
 import { useSkus } from '../data/skus';
 import * as db from '../../services/dbService';
-import { geminiService, setGeminiApiKey } from '../../services/geminiService';
+import { kieService, setKieApiKey } from '../../services/kieService';
 import { MODEL_CONFIGS, CATEGORY_POSES } from '../../constants';
 import { ModelType, ProductCategory } from '../../types';
 import type { GeneratedImage, GenerationBatch, ShotConfig, UploadedFiles, UploadedFile, SKU } from '../../types';
@@ -18,7 +18,7 @@ import type { GeneratedImage, GenerationBatch, ShotConfig, UploadedFiles, Upload
  * db.saveGenerationBatch (→ visible in Output). Requires a Gemini API key (stored locally).
  */
 
-const KEY_LS = 'gemini_api_key';
+const KEY_LS = 'kie_api_key';
 
 const Ico = ({ d, size = 16, sw = 1.7 }: { d: string; size?: number; sw?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d={d} /></svg>
@@ -93,14 +93,14 @@ export default function GenerationCanvas() {
     const k = keyDraft.trim();
     setApiKey(k);
     try { localStorage.setItem(KEY_LS, k); } catch { /* ignore */ }
-    setGeminiApiKey(k);
+    setKieApiKey(k);
     setKeyModal(false);
   };
 
   const runGeneration = async () => {
     if (!project || selectedSkus.length === 0 || activeShots.length === 0) return;
     if (!apiKey) { setKeyDraft(''); setKeyModal(true); return; }
-    setGeminiApiKey(apiKey);
+    setKieApiKey(apiKey);
     setError(null);
     setGenerating(true);
     setResults({});
@@ -149,11 +149,11 @@ export default function GenerationCanvas() {
         };
 
         // Fire generation for this SKU across all active shots (progress arrives via callback).
-        await geminiService.generateTryOn(
+        await kieService.generateTryOn(
           face, files, modelConfig, activeShots,
           project.brandName, category, project.environment, project.lighting,
           undefined, undefined, project.negativePrompt, project.seed,
-          project.fashionType, project.mood, onProgress,
+          project.fashionType, project.mood, onProgress, batchId,
         );
       }
     } catch (e) {
@@ -331,8 +331,8 @@ export default function GenerationCanvas() {
           <div className="w-full max-w-md rounded-2xl border border-wire-border bg-wire-surface p-6 shadow-pop">
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-lg font-semibold text-wire-text">Gemini API key</p>
-                <p className="mt-1 text-sm text-wire-muted">Generation uses Google Gemini. Your key is stored locally in this browser only.</p>
+                <p className="text-lg font-semibold text-wire-text">Kie API key</p>
+                <p className="mt-1 text-sm text-wire-muted">Generation uses Kie.ai (nano-banana-pro). Your key is stored locally in this browser only.</p>
               </div>
               <button type="button" onClick={() => setKeyModal(false)} aria-label="Close" className="text-wire-muted hover:text-wire-text"><IconX /></button>
             </div>
@@ -340,7 +340,7 @@ export default function GenerationCanvas() {
               type="password"
               value={keyDraft}
               onChange={(e) => setKeyDraft(e.target.value)}
-              placeholder="AIza…"
+              placeholder="Bearer token…"
               className="mt-4 w-full rounded-md border border-wire-border bg-wire-bg px-3 py-2 text-sm text-wire-text focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
             />
             <div className="mt-4 flex items-center justify-end gap-2">

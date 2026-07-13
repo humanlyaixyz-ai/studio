@@ -454,7 +454,6 @@ export const MODEL_CONFIGS: Record<ModelType, { description: string; poses: stri
 };
 
 export const KIE_MODEL_ID = 'nano-banana-pro';
-export const KIE_CALLBACK_URL = 'https://virtualshoot.odndigital.com/api/callback';
 
 export const PRESET_BACKGROUNDS: Record<ModelType, { label: string; color: string }[]> = {
   [ModelType.ECOM_SHOOT]: [

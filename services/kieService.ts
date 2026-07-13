@@ -1,5 +1,5 @@
 import { UploadedFiles, GeneratedImage, ModelType, ShotConfig, StylingConfig, CameraConfig, ProductCategory } from '../types';
-import { MODEL_CONFIGS, KIE_MODEL_ID, KIE_CALLBACK_URL, CORE_GENERATION_PROMPT, PRODUCT_GENERATION_PROMPT, REFINEMENT_PROMPT, SYSTEM_INSTRUCTION, DEFAULT_NEGATIVE_PROMPT, NON_FASHION_CATEGORIES } from '../constants';
+import { MODEL_CONFIGS, KIE_MODEL_ID, CORE_GENERATION_PROMPT, PRODUCT_GENERATION_PROMPT, REFINEMENT_PROMPT, SYSTEM_INSTRUCTION, DEFAULT_NEGATIVE_PROMPT, NON_FASHION_CATEGORIES } from '../constants';
 import { resizeImageBase64 } from '../utils/imageUtils';
 import { uploadImagesToS3 } from './s3Upload';
 
@@ -396,16 +396,15 @@ ${negativeInstruction}`;
             const finalPrompt = `${SYSTEM_INSTRUCTION}${imageContext}\n\n${fullPrompt}`;
 
             const payload = {
-                model: KIE_MODEL_ID, // 'nano-banana-pro'
+                model: KIE_MODEL_ID,
                 input: {
                     prompt: finalPrompt,
-                    image_input: imageUrls, // Updated to image_input per official documentation for Nano Banana Pro
+                    image_input: imageUrls,
                     negative_prompt: combinedNegativePrompt,
                     aspect_ratio: modelConfig.aspectRatio || "3:4",
                     num_images: 1,
-                    resolution: "4K", // Added resolution parameter
-                    output_format: "png", // Added output_format parameter
-                    callBackUrl: `${KIE_CALLBACK_URL}?batchId=${batchId}&index=${index}` // Unique callback URL for each generation
+                    resolution: "4K",
+                    output_format: "png",
                 }
             };
 
